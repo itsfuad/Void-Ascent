@@ -72,8 +72,9 @@ static constexpr float CAMERA_FOLLOW_SPEED = 9.0f;
 // Prevents the camera from lagging too far behind.
 static constexpr float CAMERA_MAX_LAG_ALTITUDE = 1.15f;
 
-// Screen-space visual centre used after the initial free rise.
-static constexpr float ROCKET_TRACKING_CENTRE_Y = 126.0f;
+// Body-only screen-space centre used after the initial free rise. Exhaust is
+// intentionally excluded so plume length cannot pull the vehicle upward.
+static constexpr float ROCKET_BODY_TRACKING_CENTRE_Y = 140.0f;
 
 // =============================================================================
 // Colours
@@ -529,6 +530,7 @@ struct Fragment : public SceneObject {
 
   float life = 0.0f;
   float gravity = 35.0f;
+  float relativeDrag = 0.0f;
   float cameraScale = 1.0f;
   float worldVelocity = 0.0f;
 
@@ -703,9 +705,9 @@ public:
     // or waiting on an empty stage cannot advance it independently.
     float pathAmount = clamp01((altitude - 15.0f) / 325.0f);
     projection.rocketCentreX = SCREEN_W * 0.5f +
-                               38.0f * pathAmount * pathAmount;
+                               42.0f * pathAmount * pathAmount;
     projection.rocketPitchRadians =
-      0.105f * smoothStep(45.0f, 230.0f, altitude);
+      0.175f * smoothStep(32.0f, 205.0f, altitude);
     return projection;
   }
 };
@@ -1187,6 +1189,7 @@ static Fragment *createFragment(FragmentType type, float x, float y, float width
   fragment->spin = spin;
   fragment->life = life;
   fragment->gravity = 35.0f;
+  fragment->relativeDrag = 0.0f;
   fragment->cameraScale = 1.0f;
   fragment->worldVelocity = 0.0f;
   fragment->bodyColour = C_PAPER;
@@ -1235,7 +1238,8 @@ static void updateFragments(float deltaSeconds) {
 
     if (fragment.cameraTracked) {
       fragment.worldVelocity -=
-        (gravityAtAltitude(game.altitude) + 0.85f) * deltaSeconds;
+        (gravityAtAltitude(game.altitude) + fragment.relativeDrag) *
+        deltaSeconds;
       fragment.y -= fragment.worldVelocity * WORLD_PIXELS_PER_ALTITUDE *
                     deltaSeconds;
     } else {
@@ -2577,61 +2581,71 @@ static void drawEngineFlame(const StageGeometry &activeGeometry,
     (int16_t)roundf(activeGeometry.y + activeGeometry.height) +
     scaledSize(5.0f, scale);
 
-  float flicker = sinf(now * 0.045f) * 0.08f +
-                  sinf(now * 0.081f) * 0.04f;
+  float flicker = sinf(now * 0.045f) * 0.045f +
+                  sinf(now * 0.081f) * 0.025f;
   float burnoutTaper = smoothStep(0.0f, 0.13f, fuelFraction);
-  float power = clampFloat((1.0f + flicker) * burnoutTaper, 0.0f, 1.12f);
+  float power = clampFloat((1.0f + flicker) * burnoutTaper, 0.0f, 1.08f);
 
   if (power <= 0.04f) {
     return;
   }
 
-  int16_t outerLength = maxInt16(scaledSize(10.0f, scale, 6),
-    (int16_t)roundf((16.0f * scale + activeGeometry.width * 0.55f) * power));
-  int16_t outerWidth = maxInt16(scaledSize(5.0f, scale, 3),
-    (int16_t)roundf(activeGeometry.width * 0.38f));
-  int16_t baseHalfWidth = maxInt16(1, outerWidth / 4);
-  int16_t shoulderHalfWidth = maxInt16(2, outerWidth / 2);
+  float spaceAmount = smoothStep(45.0f, 165.0f,
+                                 displayedAltitudeAt(game.altitude));
+  int16_t outerLength = maxInt16(scaledSize(11.0f, scale, 7),
+    (int16_t)roundf((18.0f * scale + activeGeometry.width * 0.52f) * power));
+  int16_t baseHalfWidth = maxInt16(1, scaledSize(2.0f, scale) / 2);
+  int16_t shoulderHalfWidth = maxInt16(2, (int16_t)roundf(
+    activeGeometry.width * lerpFloat(0.18f, 0.26f, spaceAmount)));
   float tipDrift = (sinf(now * 0.031f) + sinf(now * 0.017f)) *
-                   0.75f * scale;
+                   0.55f * scale;
 
-  // Rocket-local scanlines form a rounded, asymmetric envelope. Width stays
-  // stable; only the taper, tip and one-pixel edges flicker.
+  // A pressure plume starts narrow at the bell, expands smoothly, then breaks
+  // into a soft turbulent tail. Vacuum expansion widens it without changing
+  // the attachment point or making the whole flame pulse.
   for (int16_t row = 0; row <= outerLength; row++) {
     float amount = (float)row / maxFloat(1.0f, (float)outerLength);
-    float bulge = sqrtf(maxFloat(0.0f, sinf(amount * 3.1415926f)));
+    float expansion = smoothStep(0.0f, 0.58f, amount);
+    float tail = 1.0f - 0.88f * smoothStep(0.72f, 1.0f, amount);
     int16_t halfWidth = maxInt16(1, (int16_t)roundf(
-      baseHalfWidth * (1.0f - amount) + shoulderHalfWidth * bulge));
+      (baseHalfWidth + (shoulderHalfWidth - baseHalfWidth) * expansion) *
+      tail));
     int16_t centreDrift = (int16_t)roundf(tipDrift * amount +
-      sinf(now * 0.023f + row * 0.61f) * 0.45f * amount);
-    int16_t edgeVariation = ((row + (int16_t)(now / 73U)) % 7 == 0) ? 1 : 0;
+      sinf(now * 0.023f + row * 0.61f) * 0.35f * amount);
+    int16_t edgeVariation =
+      amount > 0.55f && ((row + (int16_t)(now / 73U)) % 7 == 0) ? 1 : 0;
     int16_t axisShift = rocketPitchOffset(nozzleY + row, pivotY, pitch);
     frame.drawFastHLine(centreX + axisShift + centreDrift - halfWidth,
                         nozzleY + row, halfWidth * 2 + 1 + edgeVariation,
                         C_RED);
   }
 
-  int16_t middleLength = maxInt16(4, outerLength * 3 / 4);
-  int16_t middleShoulder = maxInt16(1, outerWidth / 3);
+  int16_t middleLength = maxInt16(4, (int16_t)roundf(outerLength * 0.80f));
+  int16_t middleShoulder = maxInt16(1, (int16_t)roundf(
+    shoulderHalfWidth * 0.62f));
   for (int16_t row = 0; row <= middleLength; row++) {
     float amount = (float)row / maxFloat(1.0f, (float)middleLength);
-    float bulge = maxFloat(0.0f, sinf(amount * 3.1415926f));
+    float expansion = smoothStep(0.0f, 0.52f, amount);
+    float tail = 1.0f - 0.92f * smoothStep(0.68f, 1.0f, amount);
     int16_t halfWidth = maxInt16(1, (int16_t)roundf(
-      baseHalfWidth * (1.0f - amount) + middleShoulder * bulge));
+      (baseHalfWidth + (middleShoulder - baseHalfWidth) * expansion) * tail));
     int16_t centreDrift = (int16_t)roundf(tipDrift * amount * 0.45f);
     int16_t axisShift = rocketPitchOffset(nozzleY + row, pivotY, pitch);
     frame.drawFastHLine(centreX + axisShift + centreDrift - halfWidth,
                         nozzleY + row, halfWidth * 2 + 1, C_ORANGE);
   }
 
-  int16_t coreLength = maxInt16(3, outerLength / 3);
-  int16_t coreHalfWidth = maxInt16(1, scaledSize(2.0f, scale) / 2);
+  int16_t coreLength = maxInt16(4, (int16_t)roundf(outerLength * 0.42f));
+  int16_t coreShoulder = maxInt16(1, scaledSize(3.0f, scale) / 2);
   for (int16_t row = 0; row < coreLength; row++) {
-    int16_t halfWidth = row < coreLength / 2 ? coreHalfWidth : 0;
+    float amount = (float)row / maxFloat(1.0f, (float)(coreLength - 1));
+    float diamond = fabsf(sinf(amount * 2.0f * 3.1415926f));
+    int16_t halfWidth = maxInt16(0, (int16_t)roundf(
+      (1.0f - amount) * coreShoulder * (0.55f + diamond * 0.45f)));
     int16_t axisShift = rocketPitchOffset(nozzleY + row, pivotY, pitch);
     frame.drawFastHLine(centreX + axisShift - halfWidth, nozzleY + row,
                         halfWidth * 2 + 1,
-                        row < coreLength * 2 / 3 ? C_WHITE : C_YELLOW);
+                        amount < 0.62f ? C_WHITE : C_YELLOW);
   }
 }
 
@@ -2710,7 +2724,7 @@ static void setFeedback(const char *message, uint16_t colour, float duration) {
 static void createWholeDetachedStage(const StageDefinition &definition,
                                      const StageGeometry &geometry,
                                      float fuelFraction, float pivotY,
-                                     float pitch) {
+                                     float pitch, bool finalStage) {
   int16_t bandPosition =
     maxInt16((int16_t)5, (int16_t)(geometry.height / 5.0f));
   float side = randomGenerator.chance(0.5f) ? -1.0f : 1.0f;
@@ -2727,9 +2741,15 @@ static void createWholeDetachedStage(const StageDefinition &definition,
     definition.bandColour, fuelFraction, (int8_t)bandPosition);
 
   // Screen Y is shifted by camera movement; the stored world velocity supplies
-  // the opposite half of that transform and preserves ascent momentum.
+  // the opposite half of that transform and preserves ascent momentum. The
+  // final stage needs more relative drag because neither vehicle accelerates
+  // after separation; otherwise they coast together and appear stationary.
   stage->cameraTracked = true;
-  stage->worldVelocity = game.velocity - randomGenerator.range(1.8f, 3.0f);
+  float separationLoss = finalStage
+    ? randomGenerator.range(2.8f, 3.6f)
+    : randomGenerator.range(1.8f, 2.7f);
+  stage->worldVelocity = game.velocity - separationLoss;
+  stage->relativeDrag = finalStage ? 3.2f : 1.8f;
   stage->cameraScale = currentRocketVisualScale();
 }
 
@@ -2888,8 +2908,9 @@ static void separateCurrentStage() {
   float remainingFuel = clamp01(1.0f - progress);
 
   float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
+  bool finalStage = game.activeStage + 1 >= currentMission().stageCount;
   createWholeDetachedStage(*stage, activeGeometry, remainingFuel,
-                           pivotY, geometry.pitchRadians);
+                           pivotY, geometry.pitchRadians, finalStage);
 
   float seamX = activeGeometry.x + activeGeometry.width * 0.5f +
     rocketPitchOffset(activeGeometry.y, pivotY, geometry.pitchRadians);
@@ -3038,7 +3059,8 @@ static void startMission() {
   // Track the complete stack by its visual centre, not by a fixed nose
   // displacement. This gives two-, three- and four-stage rockets the same
   // upper-middle composition while preserving their launch-pad position.
-  game.trackingNoseY = ROCKET_TRACKING_CENTRE_Y - completeHeight * 0.5f;
+  game.trackingNoseY =
+    ROCKET_BODY_TRACKING_CENTRE_Y - completeHeight * 0.5f;
 
   if (game.trackingNoseY < 24.0f) {
     game.trackingNoseY = 24.0f;
@@ -3103,15 +3125,18 @@ static void spawnContinuousEngineEffects(const RocketGeometry &geometry) {
                                  displayedAltitudeAt(game.altitude));
   float inheritedScreenVelocity =
     -maxFloat(0.0f, game.velocity) * WORLD_PIXELS_PER_ALTITUDE;
+  float exhaustAxisX = -tanf(geometry.pitchRadians);
 
   if (spaceAmount < 0.72f &&
       randomGenerator.chance(0.72f - spaceAmount * 0.75f)) {
+    float exhaustSpeed = randomGenerator.range(19.0f, 30.0f);
     spawnParticle(
       ParticleType::FIRE,
       nozzleX + randomGenerator.range(-1.5f, 1.5f) * scale,
       nozzleY + randomGenerator.range(1.0f, 3.0f) * scale,
-      randomGenerator.range(-8.0f, 8.0f) * (1.0f - spaceAmount * 0.35f),
-      inheritedScreenVelocity + randomGenerator.range(19.0f, 30.0f),
+      exhaustAxisX * exhaustSpeed +
+        randomGenerator.range(-5.0f, 5.0f) * (1.0f - spaceAmount * 0.35f),
+      inheritedScreenVelocity + exhaustSpeed,
       randomGenerator.range(0.09f, 0.17f),
       randomGenerator.range(0.8f, 1.4f) * scale,
       randomGenerator.chance(0.55f) ? C_YELLOW : C_ORANGE);
@@ -3119,11 +3144,13 @@ static void spawnContinuousEngineEffects(const RocketGeometry &geometry) {
 
   if (spaceAmount < 0.70f &&
       randomGenerator.chance((1.0f - spaceAmount) * 0.58f)) {
+    float exhaustSpeed = randomGenerator.range(13.0f, 23.0f);
     spawnParticle(ParticleType::SMOKE,
                   nozzleX + randomGenerator.range(-3.0f, 3.0f) * scale,
                   nozzleY + scaledSize(4.0f, scale),
-                  randomGenerator.range(-10.0f, 10.0f),
-                  inheritedScreenVelocity + randomGenerator.range(13.0f, 23.0f),
+                  exhaustAxisX * exhaustSpeed +
+                    randomGenerator.range(-7.0f, 7.0f),
+                  inheritedScreenVelocity + exhaustSpeed,
                   randomGenerator.range(0.28f, 0.58f),
                   randomGenerator.range(1.4f, 2.6f) * scale, C_SMOKE);
   }
