@@ -38,11 +38,15 @@ static constexpr int16_t SCREEN_H = 320;
 static constexpr int16_t LCD_NATIVE_W = 172;
 static constexpr int16_t LCD_NATIVE_H = 320;
 
+// User-facing display brightness percentage. Keep this in the 0-100 range.
+static uint8_t displayBrightness = 50;  // 0-100 percent
+static constexpr uint8_t BACKLIGHT_CHANNEL = 0;
+
 #define LCD_ROTATION 2
 #define LCD_SPI_HZ 40000000UL
 
 Arduino_DataBus *lcdBus = new Arduino_ESP32SPI(
-    PIN_LCD_DC, PIN_LCD_CS, PIN_LCD_SCLK, PIN_LCD_MOSI, GFX_NOT_DEFINED);
+  PIN_LCD_DC, PIN_LCD_CS, PIN_LCD_SCLK, PIN_LCD_MOSI, GFX_NOT_DEFINED);
 
 Arduino_GFX *gfx = new Arduino_ST7789(lcdBus, PIN_LCD_RST, LCD_ROTATION, true,
                                       LCD_NATIVE_W, LCD_NATIVE_H, 34, 0, 34, 0);
@@ -68,13 +72,15 @@ static constexpr float CAMERA_FOLLOW_SPEED = 9.0f;
 // Prevents the camera from lagging too far behind.
 static constexpr float CAMERA_MAX_LAG_ALTITUDE = 1.15f;
 
+// Screen-space visual centre used after the initial free rise.
+static constexpr float ROCKET_TRACKING_CENTRE_Y = 126.0f;
+
 // =============================================================================
 // Colours
 // =============================================================================
 
 static constexpr uint16_t C565(uint8_t red, uint8_t green, uint8_t blue) {
-  return ((uint16_t)(red & 0xF8) << 8) | ((uint16_t)(green & 0xFC) << 3) |
-         ((uint16_t)blue >> 3);
+  return ((uint16_t)(red & 0xF8) << 8) | ((uint16_t)(green & 0xFC) << 3) | ((uint16_t)blue >> 3);
 }
 
 static constexpr uint16_t C_BLACK = C565(2, 4, 8);
@@ -84,12 +90,12 @@ static constexpr uint16_t C_PANEL_2 = C565(21, 29, 43);
 static constexpr uint16_t C_BORDER = C565(43, 55, 73);
 
 static constexpr uint16_t C_TEXT = C565(235, 241, 244);
-static constexpr uint16_t C_WHITE = C565(255, 255, 250);
-static constexpr uint16_t C_MUTED = C565(111, 124, 141);
+static constexpr uint16_t C_WHITE = C565(242, 245, 239);
+static constexpr uint16_t C_MUTED = C565(136, 149, 164);
 
 static constexpr uint16_t C_GREEN = C565(83, 235, 166);
 static constexpr uint16_t C_FUEL = C565(89, 246, 178);
-static constexpr uint16_t C_CYAN = C565(66, 210, 242);
+static constexpr uint16_t C_CYAN = C565(54, 185, 216);
 static constexpr uint16_t C_BLUE = C565(64, 123, 238);
 static constexpr uint16_t C_PURPLE = C565(153, 91, 238);
 
@@ -99,7 +105,7 @@ static constexpr uint16_t C_RED = C565(242, 49, 61);
 static constexpr uint16_t C_DARK_RED = C565(126, 34, 38);
 
 static constexpr uint16_t C_PAPER = C565(218, 226, 226);
-static constexpr uint16_t C_HIGHLIGHT = C565(246, 246, 239);
+static constexpr uint16_t C_HIGHLIGHT = C565(232, 236, 230);
 static constexpr uint16_t C_METAL = C565(139, 153, 164);
 static constexpr uint16_t C_METAL_DARK = C565(42, 49, 60);
 
@@ -141,7 +147,9 @@ static float clampFloat(float value, float minimum, float maximum) {
   return value;
 }
 
-static float clamp01(float value) { return clampFloat(value, 0.0f, 1.0f); }
+static float clamp01(float value) {
+  return clampFloat(value, 0.0f, 1.0f);
+}
 
 static float minFloat(float first, float second) {
   return first < second ? first : second;
@@ -210,7 +218,9 @@ struct RandomGenerator {
     return minimum + (int)(next() % (uint32_t)(maximum - minimum + 1));
   }
 
-  bool chance(float probability) { return range(0.0f, 1.0f) < probability; }
+  bool chance(float probability) {
+    return range(0.0f, 1.0f) < probability;
+  }
 };
 
 static RandomGenerator randomGenerator;
@@ -219,7 +229,8 @@ static RandomGenerator randomGenerator;
 // Missions
 // =============================================================================
 
-enum class FlightType : uint8_t { TEST_FLIGHT, OUTER_SPACE };
+enum class FlightType : uint8_t { TEST_FLIGHT,
+                                  OUTER_SPACE };
 
 struct StageDefinition {
   const char *name;
@@ -227,7 +238,6 @@ struct StageDefinition {
   uint8_t width;
   uint8_t height;
 
-  float burnSeconds;
   float thrust;
 
   uint16_t bandColour;
@@ -249,93 +259,133 @@ struct MissionDefinition {
   StageDefinition stages[4];
 };
 
-// Longer burn times mean stage separation happens much higher.
-// Higher thrust makes the rocket and world movement feel faster.
+// More stages mean shorter individual burn windows. Higher-stage missions
+// therefore demand more frequent, more accurate separation timing.
 static const MissionDefinition MISSIONS[] = {
-    {"T-01",
-     "TEST FLIGHT",
-     "VALIDATE THE STACK",
-     "RECOVER THE CAPSULE",
-     450,
-     true,
-     FlightType::TEST_FLIGHT,
-     2,
-     {{"BOOSTER", 31, 68, 7.40f, 7.00f, C_ORANGE},
-      {"UPPER", 22, 50, 6.00f, 5.60f, C_CYAN},
+  { "T-01",
+    "TEST FLIGHT",
+    "VALIDATE THE STACK",
+    "RECOVER THE CAPSULE",
+    420,
+    true,
+    FlightType::TEST_FLIGHT,
+    2,
+    { { "BOOSTER", 31, 68, 7.00f, C_ORANGE },
+      { "UPPER", 22, 50, 5.70f, C_CYAN },
       {},
-      {}}},
+      {} } },
 
-    {"K-100",
-     "KARMAN RUN",
-     "CROSS OUTER SPACE",
-     "PAYLOAD CONTINUES",
-     535,
-     false,
-     FlightType::OUTER_SPACE,
-     2,
-     {{"BOOSTER", 32, 70, 7.65f, 7.15f, C_ORANGE},
-      {"UPPER", 23, 53, 6.25f, 5.75f, C_BLUE},
+  { "K-100",
+    "KARMAN RUN",
+    "CROSS OUTER SPACE",
+    "PAYLOAD CONTINUES",
+    480,
+    false,
+    FlightType::OUTER_SPACE,
+    2,
+    { { "BOOSTER", 32, 70, 7.40f, C_ORANGE },
+      { "UPPER", 23, 53, 6.10f, C_BLUE },
       {},
-      {}}},
+      {} } },
 
-    {"P-180",
-     "ORBITAL PROBE",
-     "REACH HIGH SPACE",
-     "DEPLOY THE PROBE",
-     920,
-     false,
-     FlightType::OUTER_SPACE,
-     3,
-     {{"BOOSTER", 33, 66, 7.80f, 7.30f, C_ORANGE},
-      {"CORE", 25, 50, 6.40f, 6.15f, C_BLUE},
-      {"UPPER", 18, 38, 4.75f, 5.15f, C_PURPLE},
-      {}}},
+  { "P-180",
+    "ORBITAL PROBE",
+    "REACH HIGH SPACE",
+    "DEPLOY THE PROBE",
+    700,
+    false,
+    FlightType::OUTER_SPACE,
+    3,
+    { { "BOOSTER", 33, 66, 8.20f, C_ORANGE },
+      { "CORE", 25, 50, 7.10f, C_BLUE },
+      { "UPPER", 18, 38, 6.10f, C_PURPLE },
+      {} } },
 
-    {"C-220",
-     "CREW QUAL",
-     "COMPLETE CREW ASCENT",
-     "RECOVER THE CAPSULE",
-     1080,
-     true,
-     FlightType::OUTER_SPACE,
-     3,
-     {{"BOOSTER", 34, 68, 8.00f, 7.45f, C_ORANGE},
-      {"CORE", 26, 52, 6.55f, 6.30f, C_BLUE},
-      {"UPPER", 19, 39, 4.95f, 5.30f, C_GREEN},
-      {}}},
+  { "C-220",
+    "CREW QUAL",
+    "COMPLETE CREW ASCENT",
+    "RECOVER THE CAPSULE",
+    800,
+    true,
+    FlightType::OUTER_SPACE,
+    3,
+    { { "BOOSTER", 34, 68, 8.50f, C_ORANGE },
+      { "CORE", 26, 52, 7.30f, C_BLUE },
+      { "UPPER", 19, 39, 6.20f, C_GREEN },
+      {} } },
 
-    {"H-340",
-     "HEAVY ASCENT",
-     "FOUR-STAGE FLIGHT",
-     "REACH DEEP SPACE",
-     1540,
-     false,
-     FlightType::OUTER_SPACE,
-     4,
-     {{"BOOSTER", 35, 58, 8.20f, 7.65f, C_ORANGE},
-      {"CORE", 29, 46, 6.80f, 6.50f, C_BLUE},
-      {"UPPER", 23, 36, 5.10f, 5.55f, C_GREEN},
-      {"KICK", 17, 28, 3.85f, 4.85f, C_PURPLE}}}};
+  { "H-340",
+    "HEAVY ASCENT",
+    "FOUR-STAGE FLIGHT",
+    "REACH DEEP SPACE",
+    1050,
+    false,
+    FlightType::OUTER_SPACE,
+    4,
+    { { "BOOSTER", 35, 58, 9.40f, C_ORANGE },
+      { "CORE", 29, 46, 8.10f, C_BLUE },
+      { "UPPER", 23, 36, 7.00f, C_GREEN },
+      { "KICK", 17, 28, 6.10f, C_PURPLE } } }
+};
 
 static constexpr uint8_t MISSION_COUNT = sizeof(MISSIONS) / sizeof(MISSIONS[0]);
+
+class FlightTimingModel {
+public:
+  float totalPoweredSeconds(const MissionDefinition &mission) const {
+    // Two-, three- and four-stage stacks stay within a 12 percent total burn
+    // range while giving higher-stage missions shorter individual windows.
+    return 12.40f + maxFloat(0.0f, mission.stageCount - 2.0f) * 0.75f;
+  }
+
+  float stageBurnSeconds(const MissionDefinition &mission,
+                         uint8_t stageIndex) const {
+    if (stageIndex >= mission.stageCount) {
+      return 0.0f;
+    }
+
+    float totalHeight = 0.0f;
+    for (uint8_t index = 0; index < mission.stageCount; index++) {
+      totalHeight += mission.stages[index].height;
+    }
+
+    return totalPoweredSeconds(mission) * mission.stages[stageIndex].height /
+           maxFloat(1.0f, totalHeight);
+  }
+
+  float lateGraceSeconds(const MissionDefinition &mission,
+                         uint8_t stageIndex) const {
+    return clampFloat(stageBurnSeconds(mission, stageIndex) * 0.16f,
+                      0.45f, 0.85f);
+  }
+};
+
+static const FlightTimingModel flightTiming;
 
 // =============================================================================
 // Runtime types
 // =============================================================================
 
-enum class ScreenMode : uint8_t { SPLASH, BRIEFING, FLIGHT, RESULT };
+enum class ScreenMode : uint8_t { SPLASH,
+                                  BRIEFING,
+                                  FLIGHT,
+                                  RESULT };
 
 enum class FlightPhase : uint8_t {
   COUNTDOWN,
   BURNING,
   COASTING,
+  APOGEE,
+  REENTRY,
   DESCENDING,
   EXPLOSION,
   DEPLOYMENT,
   RECOVERY
 };
 
-enum class ParticleType : uint8_t { SMOKE, FIRE, SPARK };
+enum class ParticleType : uint8_t { SMOKE,
+                                    FIRE,
+                                    SPARK };
 
 enum class FragmentType : uint8_t {
   WHOLE_STAGE,
@@ -343,6 +393,37 @@ enum class FragmentType : uint8_t {
   SIDE_PANEL,
   ENGINE,
   CAPSULE
+};
+
+struct BoundingBox {
+  float left = 0.0f;
+  float top = 0.0f;
+  float right = 0.0f;
+  float bottom = 0.0f;
+
+  bool intersectsScreen() const {
+    return right >= 0.0f && left < SCREEN_W &&
+           bottom >= 0.0f && top < SCREEN_H;
+  }
+};
+
+// Independent drawable entities share one screen-space visibility contract.
+// No virtual methods are needed because these fixed-size pools are never
+// accessed polymorphically.
+class SceneObject {
+public:
+  BoundingBox bounds;
+
+  bool isVisibleOnScreen() const {
+    return bounds.intersectsScreen();
+  }
+
+  void setBoundingBox(float left, float top, float right, float bottom) {
+    bounds.left = left;
+    bounds.top = top;
+    bounds.right = right;
+    bounds.bottom = bottom;
+  }
 };
 
 struct ButtonEvents {
@@ -409,7 +490,7 @@ struct OneButton {
   }
 };
 
-struct Particle {
+struct Particle : public SceneObject {
   bool active = false;
 
   ParticleType type = ParticleType::SMOKE;
@@ -428,8 +509,9 @@ struct Particle {
   uint16_t colour = C_WHITE;
 };
 
-struct Fragment {
+struct Fragment : public SceneObject {
   bool active = false;
+  bool cameraTracked = false;
 
   FragmentType type = FragmentType::STAGE_SLICE;
 
@@ -446,6 +528,9 @@ struct Fragment {
   float height = 0.0f;
 
   float life = 0.0f;
+  float gravity = 35.0f;
+  float cameraScale = 1.0f;
+  float worldVelocity = 0.0f;
 
   uint16_t bodyColour = C_PAPER;
   uint16_t bandColour = C_ORANGE;
@@ -454,7 +539,7 @@ struct Fragment {
   int8_t bandY = -1;
 };
 
-struct Star {
+struct Star : public SceneObject {
   int16_t x = 0;
   int16_t y = 0;
 
@@ -462,7 +547,7 @@ struct Star {
   float parallax = 1.0f;
 };
 
-struct Cloud {
+struct Cloud : public SceneObject {
   int16_t x = 0;
   float worldAltitude = 0.0f;
 
@@ -480,9 +565,11 @@ struct StageGeometry {
   uint8_t sourceIndex = 0;
 };
 
-struct RocketGeometry {
+struct RocketGeometry : public SceneObject {
   float noseY = 0.0f;
   float bottomY = 0.0f;
+  float visualScale = 1.0f;
+  float pitchRadians = 0.0f;
 
   float payloadX = 0.0f;
   float payloadY = 0.0f;
@@ -491,6 +578,24 @@ struct RocketGeometry {
 
   uint8_t stageCount = 0;
   StageGeometry stages[4];
+};
+
+class LaunchPadObject : public SceneObject {
+public:
+  void place(float cameraAltitude) {
+    baseY = 274.0f + cameraAltitude * WORLD_PIXELS_PER_ALTITUDE;
+
+    // Includes the upper warning light and the complete ground fill.
+    setBoundingBox(0.0f, baseY - 170.0f,
+                   SCREEN_W - 1.0f, baseY + 113.0f);
+  }
+
+  float y() const {
+    return baseY;
+  }
+
+private:
+  float baseY = 274.0f;
 };
 
 struct PointF {
@@ -511,6 +616,7 @@ struct GameState {
   uint8_t activeStage = 0;
 
   float stageElapsed = 0.0f;
+  bool stageBurnoutCueShown = false;
 
   float altitude = 0.0f;
   float maximumAltitude = 0.0f;
@@ -543,6 +649,9 @@ struct GameState {
   float parachuteOpen = 0.0f;
   float deploymentY = 165.0f;
 
+  float transitionStartAltitude = 0.0f;
+  float reentryHeat = 0.0f;
+
   float explosionX = 86.0f;
   float explosionY = 150.0f;
 };
@@ -558,8 +667,50 @@ static Fragment fragments[MAX_FRAGMENTS];
 
 static Star stars[62];
 static Cloud clouds[18];
+static LaunchPadObject launchPad;
 
 static uint32_t lastFrameAt = 0;
+
+struct SceneProjection {
+  float earthRadius = 6000.0f;
+  float earthCentreY = 6284.0f;
+  float rocketCentreX = SCREEN_W * 0.5f;
+  float rocketScale = 1.0f;
+  float rocketPitchRadians = 0.0f;
+};
+
+class SceneProjectionModel {
+public:
+  SceneProjection atAltitude(float displayedAltitude) const {
+    float altitude = maxFloat(0.0f, displayedAltitude);
+    float distance = 1.0f + altitude / 18.0f;
+
+    SceneProjection projection;
+    projection.earthRadius = 42.0f +
+      (6000.0f - 42.0f) / powf(distance, 1.55f);
+
+    float surfaceY = lerpFloat(284.0f, 292.0f,
+                               smoothStep(0.0f, 115.0f, altitude));
+    float curvatureLift = 32.0f * smoothStep(150.0f, 340.0f, altitude);
+    projection.earthCentreY = surfaceY + projection.earthRadius -
+                              curvatureLift;
+
+    projection.rocketScale = lerpFloat(
+      1.0f, 0.75f, smoothStep(145.0f, 340.0f, altitude));
+
+    // A quadratic downrange path starts nearly vertical, then becomes visibly
+    // lateral as the gravity turn develops. It is altitude-driven, so coasting
+    // or waiting on an empty stage cannot advance it independently.
+    float pathAmount = clamp01((altitude - 15.0f) / 325.0f);
+    projection.rocketCentreX = SCREEN_W * 0.5f +
+                               38.0f * pathAmount * pathAmount;
+    projection.rocketPitchRadians =
+      0.105f * smoothStep(45.0f, 230.0f, altitude);
+    return projection;
+  }
+};
+
+static const SceneProjectionModel sceneProjectionModel;
 
 // =============================================================================
 // Text helpers
@@ -601,6 +752,28 @@ static void drawTextRight(const char *text, int16_t rightX, int16_t y,
   frame.setCursor(rightX - textPixelWidth(text, size), y);
 
   frame.print(text);
+}
+
+static void fillTranslucentRoundRect(int16_t x, int16_t y, int16_t width,
+                                     int16_t height, int16_t radius,
+                                     uint16_t colour, uint8_t opacity) {
+  for (int16_t row = 0; row < height; row++) {
+    int16_t edgeDistance = minInt16(row, height - 1 - row);
+    int16_t inset = 0;
+    if (edgeDistance < radius) {
+      float circleY = radius - edgeDistance;
+      inset = radius - (int16_t)floorf(sqrtf(maxFloat(
+        0.0f, radius * radius - circleY * circleY)));
+    }
+
+    for (int16_t column = inset; column < width - inset; column++) {
+      int16_t pixelX = x + column;
+      int16_t pixelY = y + row;
+      frame.drawPixel(pixelX, pixelY,
+                      blend565(frame.getPixel(pixelX, pixelY),
+                               colour, opacity));
+    }
+  }
 }
 
 // =============================================================================
@@ -766,7 +939,7 @@ static void initializeSceneSeeds() {
     clouds[index].x = randomGenerator.rangeInt(-18, SCREEN_W + 18);
 
     clouds[index].worldAltitude =
-        13.0f + index * 9.5f + randomGenerator.range(-3.5f, 3.5f);
+      13.0f + index * 9.5f + randomGenerator.range(-3.5f, 3.5f);
 
     clouds[index].size = randomGenerator.rangeInt(8, 17);
 
@@ -774,9 +947,16 @@ static void initializeSceneSeeds() {
   }
 }
 
+static float currentRocketVisualScale();
+static float gravityAtAltitude(float altitude);
+
 // =============================================================================
 // Particle system
 // =============================================================================
+
+// Particles and fragments store screen-space positions. World-camera movement
+// shifts them once per frame; camera-tracked stages additionally retain a
+// world-space vertical velocity so separation motion remains physical.
 
 static Particle *allocateParticle() {
   for (uint8_t index = 0; index < MAX_PARTICLES; index++) {
@@ -884,23 +1064,24 @@ static void updateParticles(float deltaSeconds) {
     }
 
     particle.x += particle.velocityX * deltaSeconds;
-
     particle.y += particle.velocityY * deltaSeconds;
 
     if (particle.type == ParticleType::SMOKE) {
-      particle.velocityX *= 0.975f;
-      particle.velocityY *= 0.965f;
-
-      particle.velocityY -= 2.0f * deltaSeconds;
+      particle.velocityX *= 0.970f;
+      particle.velocityY *= 0.968f;
+      particle.velocityY -= 1.5f * deltaSeconds;
+    } else if (particle.type == ParticleType::FIRE) {
+      particle.velocityX *= 0.965f;
+      particle.velocityY += 7.0f * deltaSeconds;
     } else {
-      particle.velocityY += 27.0f * deltaSeconds;
+      particle.velocityY += 20.0f * deltaSeconds;
     }
   }
 }
 
 static void drawParticles() {
   for (uint8_t index = 0; index < MAX_PARTICLES; index++) {
-    const Particle &particle = particles[index];
+    Particle &particle = particles[index];
 
     if (!particle.active) {
       continue;
@@ -919,6 +1100,12 @@ static void drawParticles() {
 
       radius = maxInt16((int16_t)1, radius);
 
+      particle.setBoundingBox(x - radius, y - radius,
+                              x + radius, y + radius);
+      if (!particle.isVisibleOnScreen()) {
+        continue;
+      }
+
       uint16_t smokeColour = blend565(C_SMOKE_DARK, particle.colour,
                                       (uint8_t)(remaining * 220.0f));
 
@@ -933,6 +1120,12 @@ static void drawParticles() {
 
       radius = maxInt16((int16_t)1, radius);
 
+      particle.setBoundingBox(x - radius - 1, y - radius - 1,
+                              x + radius + 1, y + radius + 1);
+      if (!particle.isVisibleOnScreen()) {
+        continue;
+      }
+
       frame.fillCircle(x, y, radius + 1, C_RED);
 
       frame.fillCircle(x, y, radius, particle.colour);
@@ -944,6 +1137,12 @@ static void drawParticles() {
       int16_t tailX = x - (int16_t)(particle.velocityX * 0.035f);
 
       int16_t tailY = y - (int16_t)(particle.velocityY * 0.035f);
+
+      particle.setBoundingBox(minInt16(x, tailX), minInt16(y, tailY),
+                              maxInt16(x, tailX), maxInt16(y, tailY));
+      if (!particle.isVisibleOnScreen()) {
+        continue;
+      }
 
       frame.drawLine(x, y, tailX, tailY, particle.colour);
     }
@@ -969,35 +1168,33 @@ static Fragment *allocateFragment() {
   return &fragments[replacement];
 }
 
-static void createFragment(FragmentType type, float x, float y, float width,
-                           float height, float velocityX, float velocityY,
-                           float rotation, float spin, float life,
-                           uint16_t bandColour, float fuelFraction,
-                           int8_t bandY) {
+static Fragment *createFragment(FragmentType type, float x, float y, float width,
+                                float height, float velocityX, float velocityY,
+                                float rotation, float spin, float life,
+                                uint16_t bandColour, float fuelFraction,
+                                int8_t bandY) {
   Fragment *fragment = allocateFragment();
 
   fragment->type = type;
-
+  fragment->cameraTracked = false;
   fragment->x = x;
   fragment->y = y;
-
   fragment->width = width;
   fragment->height = height;
-
   fragment->velocityX = velocityX;
   fragment->velocityY = velocityY;
-
   fragment->rotation = rotation;
   fragment->spin = spin;
-
   fragment->life = life;
-
+  fragment->gravity = 35.0f;
+  fragment->cameraScale = 1.0f;
+  fragment->worldVelocity = 0.0f;
   fragment->bodyColour = C_PAPER;
   fragment->bandColour = bandColour;
-
   fragment->fuelFraction = clamp01(fuelFraction);
-
   fragment->bandY = bandY;
+
+  return fragment;
 }
 
 static void clearFragments() {
@@ -1016,45 +1213,69 @@ static void updateFragments(float deltaSeconds) {
 
     fragment.life -= deltaSeconds;
 
-    if (fragment.life <= 0.0f || fragment.y > SCREEN_H + 130.0f) {
+    if (fragment.life <= 0.0f) {
       fragment.active = false;
       continue;
     }
 
-    fragment.velocityY += 35.0f * deltaSeconds;
+    if (fragment.type == FragmentType::WHOLE_STAGE) {
+      float newCameraScale = currentRocketVisualScale();
+      if (newCameraScale < fragment.cameraScale - 0.001f) {
+        float ratio = newCameraScale / maxFloat(0.01f, fragment.cameraScale);
+        fragment.width *= ratio;
+        fragment.height *= ratio;
+        if (fragment.bandY >= 0) {
+          fragment.bandY = (int8_t)maxInt16(1, (int16_t)roundf(fragment.bandY * ratio));
+        }
+        fragment.cameraScale = newCameraScale;
+      }
+    }
 
     fragment.x += fragment.velocityX * deltaSeconds;
 
-    fragment.y += fragment.velocityY * deltaSeconds;
+    if (fragment.cameraTracked) {
+      fragment.worldVelocity -=
+        (gravityAtAltitude(game.altitude) + 0.85f) * deltaSeconds;
+      fragment.y -= fragment.worldVelocity * WORLD_PIXELS_PER_ALTITUDE *
+                    deltaSeconds;
+    } else {
+      fragment.velocityY += fragment.gravity * deltaSeconds;
+      fragment.y += fragment.velocityY * deltaSeconds;
+    }
 
     fragment.rotation += fragment.spin * deltaSeconds;
   }
 }
 
 static void drawFragmentFuelWindow(const Fragment &fragment) {
-  if (fragment.type == FragmentType::SIDE_PANEL ||
-      fragment.type == FragmentType::ENGINE ||
-      fragment.type == FragmentType::CAPSULE) {
+  if (fragment.type == FragmentType::SIDE_PANEL || fragment.type == FragmentType::ENGINE || fragment.type == FragmentType::CAPSULE) {
     return;
   }
 
-  float windowHeight = maxFloat(4.0f, fragment.height - 6.0f);
+  float scale = fragment.cameraScale;
+  float windowWidth = maxFloat(2.0f, 5.0f * scale);
+  float windowHeight = maxFloat(3.0f * scale,
+                                fragment.height - 6.0f * scale);
 
-  fillRotatedRectangle(fragment.x, fragment.y, 5.0f, windowHeight,
+  fillRotatedRectangle(fragment.x, fragment.y, windowWidth, windowHeight,
                        fragment.rotation, C_GLASS_EDGE);
 
-  fillRotatedRectangle(fragment.x, fragment.y, 3.0f, windowHeight - 2.0f,
+  fillRotatedRectangle(fragment.x, fragment.y,
+                       maxFloat(1.0f, 3.0f * scale),
+                       maxFloat(1.0f, windowHeight - 2.0f * scale),
                        fragment.rotation, C_GLASS);
 
-  float fuelHeight = (windowHeight - 2.0f) * fragment.fuelFraction;
+  float fuelHeight = maxFloat(0.0f, windowHeight - 2.0f * scale) *
+                     fragment.fuelFraction;
 
   if (fuelHeight > 0.5f) {
-    float localCentreY = windowHeight * 0.5f - fuelHeight * 0.5f - 1.0f;
+    float localCentreY = windowHeight * 0.5f - fuelHeight * 0.5f - scale;
 
     PointF fuelCentre = rotatePoint(0.0f, localCentreY, fragment.x, fragment.y,
                                     fragment.rotation);
 
-    fillRotatedRectangle(fuelCentre.x, fuelCentre.y, 3.0f, fuelHeight,
+    fillRotatedRectangle(fuelCentre.x, fuelCentre.y,
+                         maxFloat(1.0f, 3.0f * scale), fuelHeight,
                          fragment.rotation, C_FUEL);
   }
 }
@@ -1093,7 +1314,7 @@ static void drawFragment(const Fragment &fragment) {
   }
 
   uint16_t bodyColour =
-      fragment.type == FragmentType::SIDE_PANEL ? C_METAL : fragment.bodyColour;
+    fragment.type == FragmentType::SIDE_PANEL ? C_METAL : fragment.bodyColour;
 
   fillRotatedRectangle(fragment.x + 1.0f, fragment.y + 1.0f, fragment.width,
                        fragment.height, fragment.rotation, C_BLACK);
@@ -1110,17 +1331,46 @@ static void drawFragment(const Fragment &fragment) {
     PointF bandCentre = rotatePoint(0.0f, localBandY, fragment.x, fragment.y,
                                     fragment.rotation);
 
-    fillRotatedRectangle(bandCentre.x, bandCentre.y, fragment.width, 3.0f,
+    fillRotatedRectangle(bandCentre.x, bandCentre.y, fragment.width,
+                         maxFloat(1.0f, 3.0f * fragment.cameraScale),
                          fragment.rotation, fragment.bandColour);
   }
 
   drawFragmentFuelWindow(fragment);
+
+  if (fragment.type == FragmentType::WHOLE_STAGE) {
+    PointF engineCentre = rotatePoint(
+      0.0f, fragment.height * 0.5f + 2.0f * fragment.cameraScale,
+      fragment.x, fragment.y, fragment.rotation);
+    fillRotatedRectangle(engineCentre.x, engineCentre.y,
+                         maxFloat(2.0f, fragment.width * 0.34f),
+                         maxFloat(1.0f, fragment.width * 0.18f),
+                         fragment.rotation, C_METAL_DARK);
+  }
 }
 
 static void drawFragments() {
   for (uint8_t index = 0; index < MAX_FRAGMENTS; index++) {
-    if (fragments[index].active) {
-      drawFragment(fragments[index]);
+    Fragment &fragment = fragments[index];
+    if (!fragment.active) {
+      continue;
+    }
+
+    float sine = fabsf(sinf(fragment.rotation));
+    float cosine = fabsf(cosf(fragment.rotation));
+    float extentX = fragment.width * 0.5f * cosine +
+                    fragment.height * 0.5f * sine;
+    float extentY = fragment.width * 0.5f * sine +
+                    fragment.height * 0.5f * cosine;
+    float detailMargin = maxFloat(4.0f * fragment.cameraScale,
+                                  fragment.width * 0.20f);
+    fragment.setBoundingBox(fragment.x - extentX - detailMargin,
+                            fragment.y - extentY - detailMargin,
+                            fragment.x + extentX + detailMargin,
+                            fragment.y + extentY + detailMargin);
+
+    if (fragment.isVisibleOnScreen()) {
+      drawFragment(fragment);
     }
   }
 }
@@ -1131,6 +1381,31 @@ static void drawFragments() {
 
 static const MissionDefinition &currentMission() {
   return MISSIONS[game.selectedMission];
+}
+
+static float missionDisplayTargetAltitude() {
+  static const float DISPLAY_TARGETS[] = { 45.0f, 100.0f, 180.0f, 220.0f, 340.0f };
+  return DISPLAY_TARGETS[game.selectedMission];
+}
+
+static float missionProgressAt(float internalAltitude) {
+  return clampFloat(internalAltitude /
+                      maxFloat(1.0f, (float)currentMission().targetAltitude),
+                    0.0f, 1.20f);
+}
+
+static float displayedAltitudeAt(float internalAltitude) {
+  return missionDisplayTargetAltitude() * missionProgressAt(internalAltitude);
+}
+
+static float displayedVelocityAt(float internalVelocity) {
+  return internalVelocity * missionDisplayTargetAltitude() /
+         maxFloat(1.0f, (float)currentMission().targetAltitude);
+}
+
+static float currentRocketVisualScale() {
+  return sceneProjectionModel.atAltitude(
+    displayedAltitudeAt(game.altitude)).rocketScale;
 }
 
 static const StageDefinition *currentStage() {
@@ -1170,7 +1445,10 @@ static float remainingRocketHeight(const MissionDefinition &mission,
 static void buildRocketGeometryFor(const MissionDefinition &mission,
                                    uint8_t activeStage, float noseY,
                                    RocketGeometry &geometry) {
+  // Build unscaled screen geometry from the rocket-local stack first.
   geometry.noseY = noseY;
+  geometry.visualScale = 1.0f;
+  geometry.pitchRadians = 0.0f;
 
   geometry.payloadWidth = 20.0f;
   geometry.payloadHeight = payloadHeight(mission);
@@ -1220,9 +1498,44 @@ static float currentRocketNoseY() {
   return game.launchNoseY - relativeAltitude * WORLD_PIXELS_PER_ALTITUDE;
 }
 
+static void scaleRocketGeometry(RocketGeometry &geometry, float scale) {
+  // Apply the sole rocket cinematic transform in screen space, around the
+  // complete remaining vehicle's visual centre.
+  scale = clampFloat(scale, 0.65f, 1.0f);
+
+  float anchorX = SCREEN_W * 0.5f;
+  float anchorY = (geometry.noseY + geometry.bottomY) * 0.5f;
+
+  geometry.payloadX = anchorX + (geometry.payloadX - anchorX) * scale;
+  geometry.payloadY = anchorY + (geometry.payloadY - anchorY) * scale;
+  geometry.payloadWidth *= scale;
+  geometry.payloadHeight *= scale;
+
+  for (uint8_t index = 0; index < geometry.stageCount; index++) {
+    StageGeometry &stage = geometry.stages[index];
+    stage.x = anchorX + (stage.x - anchorX) * scale;
+    stage.y = anchorY + (stage.y - anchorY) * scale;
+    stage.width *= scale;
+    stage.height *= scale;
+  }
+
+  geometry.noseY = anchorY + (geometry.noseY - anchorY) * scale;
+  geometry.bottomY = anchorY + (geometry.bottomY - anchorY) * scale;
+  geometry.visualScale = scale;
+}
+
 static void buildCurrentRocketGeometry(RocketGeometry &geometry) {
   buildRocketGeometryFor(currentMission(), game.activeStage,
                          currentRocketNoseY(), geometry);
+  SceneProjection projection = sceneProjectionModel.atAltitude(
+    displayedAltitudeAt(game.altitude));
+  scaleRocketGeometry(geometry, projection.rocketScale);
+  float pathOffsetX = projection.rocketCentreX - SCREEN_W * 0.5f;
+  geometry.payloadX += pathOffsetX;
+  for (uint8_t index = 0; index < geometry.stageCount; index++) {
+    geometry.stages[index].x += pathOffsetX;
+  }
+  geometry.pitchRadians = projection.rocketPitchRadians;
 }
 
 static float currentFuelFraction() {
@@ -1232,7 +1545,9 @@ static float currentFuelFraction() {
     return 0.0f;
   }
 
-  return clamp01(1.0f - game.stageElapsed / stage->burnSeconds);
+  float burnSeconds = flightTiming.stageBurnSeconds(
+    currentMission(), game.activeStage);
+  return clamp01(1.0f - game.stageElapsed / maxFloat(0.01f, burnSeconds));
 }
 
 // =============================================================================
@@ -1261,7 +1576,7 @@ static void updateWorldCamera(float deltaSeconds) {
   game.previousCameraAltitude = game.cameraAltitude;
 
   bool cameraCanMove =
-      game.phase == FlightPhase::BURNING || game.phase == FlightPhase::COASTING;
+    game.phase == FlightPhase::BURNING || game.phase == FlightPhase::COASTING;
 
   if (!cameraCanMove) {
     return;
@@ -1285,8 +1600,7 @@ static void updateWorldCamera(float deltaSeconds) {
     float followAmount = 1.0f - expf(-CAMERA_FOLLOW_SPEED * deltaSeconds);
 
     float nextCameraAltitude =
-        game.cameraAltitude +
-        (desiredCameraAltitude - game.cameraAltitude) * followAmount;
+      game.cameraAltitude + (desiredCameraAltitude - game.cameraAltitude) * followAmount;
 
     float remainingLag = desiredCameraAltitude - nextCameraAltitude;
 
@@ -1302,8 +1616,7 @@ static void updateWorldCamera(float deltaSeconds) {
   }
 
   float cameraMovementPixels =
-      (game.cameraAltitude - game.previousCameraAltitude) *
-      WORLD_PIXELS_PER_ALTITUDE;
+    (game.cameraAltitude - game.previousCameraAltitude) * WORLD_PIXELS_PER_ALTITUDE;
 
   shiftWorldEffectsForCamera(cameraMovementPixels);
 }
@@ -1324,7 +1637,7 @@ static uint16_t skyTopColour(float altitude) {
   uint16_t upper = C565(5, 8, 23);
 
   uint16_t firstBlend =
-      blend565(dawn, blue, (uint8_t)(blueTransition * 255.0f));
+    blend565(dawn, blue, (uint8_t)(blueTransition * 255.0f));
 
   return blend565(firstBlend, upper, (uint8_t)(spaceTransition * 255.0f));
 }
@@ -1341,14 +1654,14 @@ static uint16_t skyBottomColour(float altitude) {
   uint16_t upper = C565(8, 12, 30);
 
   uint16_t firstBlend =
-      blend565(horizon, blue, (uint8_t)(blueTransition * 255.0f));
+    blend565(horizon, blue, (uint8_t)(blueTransition * 255.0f));
 
   return blend565(firstBlend, upper, (uint8_t)(spaceTransition * 255.0f));
 }
 
 static uint16_t skyColourAtY(float altitude, int16_t y) {
   float verticalAmount =
-      clampFloat((float)y / (float)(SCREEN_H - 1), 0.0f, 1.0f);
+    clampFloat((float)y / (float)(SCREEN_H - 1), 0.0f, 1.0f);
 
   return blend565(skyTopColour(altitude), skyBottomColour(altitude),
                   (uint8_t)(verticalAmount * 255.0f));
@@ -1365,10 +1678,10 @@ static void drawSkyGradient(float altitude) {
 
 static void drawStars(float altitude) {
   for (uint8_t index = 0; index < 62; index++) {
-    const Star &star = stars[index];
+    Star &star = stars[index];
 
     float revealStart =
-        58.0f + (1.0f - star.parallax) * 110.0f + (index % 9) * 7.0f;
+      58.0f + (1.0f - star.parallax) * 110.0f + (index % 9) * 7.0f;
 
     float visibility = smoothStep(revealStart, revealStart + 190.0f, altitude);
 
@@ -1385,6 +1698,13 @@ static void drawStars(float altitude) {
     }
 
     int16_t screenY = (int16_t)movingY;
+
+    star.setBoundingBox(star.x, screenY,
+                        star.x + star.size - 1,
+                        screenY + star.size - 1);
+    if (!star.isVisibleOnScreen()) {
+      continue;
+    }
 
     uint16_t backgroundColour = skyColourAtY(altitude, screenY);
 
@@ -1423,13 +1743,13 @@ static void drawSun(float altitude) {
   uint16_t background = skyColourAtY(altitude, sampledY);
 
   uint16_t sunColour =
-      blend565(background, C_YELLOW, (uint8_t)(visibility * 255.0f));
+    blend565(background, C_YELLOW, (uint8_t)(visibility * 255.0f));
 
   frame.fillCircle(137, y, 12, sunColour);
 
   frame.drawFastHLine(
-      125, y, 24,
-      blend565(background, C_WHITE, (uint8_t)(visibility * 145.0f)));
+    125, y, 24,
+    blend565(background, C_WHITE, (uint8_t)(visibility * 145.0f)));
 }
 
 static void drawCloudShape(int16_t centreX, int16_t centreY, int16_t size,
@@ -1446,33 +1766,35 @@ static void drawCloudShape(int16_t centreX, int16_t centreY, int16_t size,
 
 static void drawClouds(float cameraAltitude, uint32_t now) {
   float atmosphereVisibility =
-      1.0f - smoothStep(150.0f, 470.0f, cameraAltitude);
+    1.0f - smoothStep(150.0f, 470.0f, cameraAltitude);
 
   for (uint8_t index = 0; index < 18; index++) {
-    const Cloud &cloud = clouds[index];
+    Cloud &cloud = clouds[index];
 
     float layerScale =
-        WORLD_PIXELS_PER_ALTITUDE * (0.52f + cloud.layer * 0.075f);
+      WORLD_PIXELS_PER_ALTITUDE * (0.52f + cloud.layer * 0.075f);
 
     float screenY =
-        286.0f - (cloud.worldAltitude - cameraAltitude) * layerScale;
+      286.0f - (cloud.worldAltitude - cameraAltitude) * layerScale;
 
-    if (screenY < -42.0f || screenY > SCREEN_H + 44.0f) {
+    int16_t drift = (int16_t)(sinf(now * 0.00018f + index * 1.7f) * 4.0f);
+    float centreX = cloud.x + drift;
+    cloud.setBoundingBox(centreX - cloud.size, screenY - cloud.size,
+                         centreX + cloud.size, screenY + cloud.size);
+    if (!cloud.isVisibleOnScreen()) {
       continue;
     }
 
     float topVisibility = smoothStep(-40.0f, 12.0f, screenY);
 
     float bottomVisibility =
-        1.0f - smoothStep(SCREEN_H - 34.0f, SCREEN_H + 40.0f, screenY);
+      1.0f - smoothStep(SCREEN_H - 34.0f, SCREEN_H + 40.0f, screenY);
 
     float visibility = atmosphereVisibility * topVisibility * bottomVisibility;
 
     if (visibility <= 0.01f) {
       continue;
     }
-
-    int16_t drift = (int16_t)(sinf(now * 0.00018f + index * 1.7f) * 4.0f);
 
     int16_t sampledY = (int16_t)screenY;
 
@@ -1487,8 +1809,8 @@ static void drawClouds(float cameraAltitude, uint32_t now) {
     uint16_t originalColour = cloud.layer == 0 ? C565(186, 198, 205) : C_CLOUD;
 
     uint16_t cloudColour =
-        blend565(skyColourAtY(cameraAltitude, sampledY), originalColour,
-                 (uint8_t)(visibility * 255.0f));
+      blend565(skyColourAtY(cameraAltitude, sampledY), originalColour,
+               (uint8_t)(visibility * 255.0f));
 
     drawCloudShape(cloud.x + drift, (int16_t)screenY, cloud.size, cloudColour);
   }
@@ -1537,242 +1859,332 @@ static void drawMountains(float cameraAltitude) {
 }
 
 // =============================================================================
-// Enhanced Earth rendering
+// Projected Earth rendering
 // =============================================================================
 
-static void drawEarthOceanSphere(int16_t centreX, int16_t centreY,
-                                 int16_t radius, float surfaceVisibility,
-                                 float fillFraction) {
-  // Only render the top `fillFraction` of the sphere for the curvature effect
-  float clampedFill = clamp01(fillFraction);
-  if (clampedFill <= 0.01f) return;
+struct EarthLandPoint {
+  float x;
+  float y;
+};
 
-  int16_t sphereTop = centreY - radius;
-  int16_t sphereBottom = centreY + radius;
-  int16_t filledBottom = sphereTop + (int16_t)((sphereBottom - sphereTop) * clampedFill);
+static bool projectedEarthBoundsAtY(float centreX, float centreY, float radius,
+                                    int16_t y, int16_t &left,
+                                    int16_t &right) {
+  float deltaY = (float)y - centreY;
+  float inside = radius * radius - deltaY * deltaY;
 
-  int16_t startY = sphereTop;
-  int16_t endY = filledBottom;
-
-  if (startY < 0) {
-    startY = 0;
+  if (inside <= 0.0f) {
+    return false;
   }
 
-  if (endY >= SCREEN_H) {
-    endY = SCREEN_H - 1;
+  float halfWidth = sqrtf(inside);
+  int32_t rawLeft = (int32_t)floorf(centreX - halfWidth);
+  int32_t rawRight = (int32_t)ceilf(centreX + halfWidth);
+
+  if (rawRight < 0 || rawLeft >= SCREEN_W) {
+    return false;
   }
+
+  left = (int16_t)maxFloat(0.0f, (float)rawLeft);
+  right = (int16_t)minFloat((float)(SCREEN_W - 1), (float)rawRight);
+
+  return right >= left;
+}
+
+static void drawProjectedEarthOcean(float centreX, float centreY, float radius,
+                                    float earthVisibility,
+                                    float skyAltitude) {
+  int16_t startY = maxInt16(0, (int16_t)floorf(centreY - radius));
+  int16_t endY = minInt16(SCREEN_H - 1,
+                          (int16_t)ceilf(centreY + radius));
 
   for (int16_t y = startY; y <= endY; y++) {
-    float deltaY = (float)(y - centreY);
-
+    float deltaY = (float)y - centreY;
     float inside = radius * radius - deltaY * deltaY;
 
     if (inside <= 0.0f) {
       continue;
     }
 
-    int16_t halfWidth = (int16_t)sqrtf(inside);
+    float halfWidth = sqrtf(inside);
+    int32_t rawLeft = (int32_t)floorf(centreX - halfWidth);
+    int32_t rawRight = (int32_t)ceilf(centreX + halfWidth);
 
-    int16_t left = centreX - halfWidth;
-
-    int16_t right = centreX + halfWidth;
-
-    if (left < 0) {
-      left = 0;
-    }
-
-    if (right >= SCREEN_W) {
-      right = SCREEN_W - 1;
-    }
-
-    int16_t totalWidth = right - left + 1;
-
-    if (totalWidth <= 0) {
+    if (rawRight < 0 || rawLeft >= SCREEN_W) {
       continue;
     }
 
-    float verticalNormal =
-        clampFloat((deltaY + radius) / (radius * 2.0f), 0.0f, 1.0f);
+    int16_t left = maxInt16(0, (int16_t)rawLeft);
+    int16_t right = minInt16(SCREEN_W - 1, (int16_t)rawRight);
+    float normalY = clampFloat(deltaY / radius, -1.0f, 1.0f);
+    float depth = (normalY + 1.0f) * 0.5f;
 
-    uint16_t centralOcean =
-        blend565(C_OCEAN_LIGHT, C_OCEAN, (uint8_t)(verticalNormal * 170.0f));
+    uint16_t ocean = blend565(C_OCEAN_LIGHT, C_OCEAN_DEEP,
+                              (uint8_t)(58.0f + depth * 132.0f));
+    uint16_t sky = skyColourAtY(skyAltitude, y);
+    ocean = blend565(sky, ocean,
+                     (uint8_t)(clamp01(earthVisibility) * 255.0f));
+    frame.drawFastHLine(left, y, right - left + 1, ocean);
 
-    centralOcean = blend565(C_OCEAN_DEEP, centralOcean,
-                            (uint8_t)(surfaceVisibility * 255.0f));
-
-    int16_t edgeWidth = maxInt16((int16_t)2, totalWidth / 6);
-
-    int16_t middleWidth = totalWidth - edgeWidth * 2;
-
-    if (middleWidth < 1) {
-      middleWidth = 1;
-    }
-
-    uint16_t darkEdge = blend565(C_VOID, centralOcean, 135);
-
-    uint16_t lightEdge = blend565(centralOcean, C_OCEAN_LIGHT, 80);
-
-    frame.drawFastHLine(left, y, edgeWidth, darkEdge);
-
-    frame.drawFastHLine(left + edgeWidth, y, middleWidth, centralOcean);
-
-    frame.drawFastHLine(right - edgeWidth + 1, y, edgeWidth, lightEdge);
-  }
-}
-
-static void drawEarthContinents(int16_t centreX, int16_t centreY,
-                                int16_t radius, float visibility,
-                                float fillFraction) {
-  (void)fillFraction;
-  if (visibility <= 0.01f) {
-    return;
-  }
-
-  uint16_t landDark =
-      blend565(C_OCEAN, C_LAND_DARK, (uint8_t)(visibility * 255.0f));
-
-  uint16_t land = blend565(C_OCEAN, C_LAND, (uint8_t)(visibility * 255.0f));
-
-  uint16_t landLight =
-      blend565(C_OCEAN, C_LAND_LIGHT, (uint8_t)(visibility * 220.0f));
-
-  int16_t scale = radius / 10;
-
-  // Left continent.
-  frame.fillCircle(centreX - scale * 4, centreY - scale * 3, scale * 2, land);
-
-  frame.fillCircle(centreX - scale * 3, centreY - scale, scale * 2, land);
-
-  frame.fillTriangle(centreX - scale * 5, centreY - scale * 3, centreX - scale,
-                     centreY - scale * 2, centreX - scale * 3,
-                     centreY + scale * 2, land);
-
-  frame.fillCircle(centreX - scale * 2, centreY + scale * 2, scale, landDark);
-
-  // Right continent.
-  frame.fillCircle(centreX + scale * 3, centreY - scale * 2, scale * 2,
-                   landLight);
-
-  frame.fillTriangle(centreX + scale, centreY - scale * 3, centreX + scale * 5,
-                     centreY - scale, centreX + scale * 3, centreY + scale * 2,
-                     landLight);
-
-  frame.fillCircle(centreX + scale * 4, centreY + scale, scale, land);
-
-  // Small islands.
-  frame.fillCircle(centreX, centreY - scale * 4,
-                   maxInt16((int16_t)1, scale / 2), landLight);
-
-  frame.fillCircle(centreX + scale, centreY + scale * 3,
-                   maxInt16((int16_t)1, scale / 2), land);
-}
-
-static void drawEarthCloudBands(int16_t centreX, int16_t centreY,
-                                int16_t radius, float visibility,
-                                float fillFraction) {
-  (void)fillFraction;
-  if (visibility <= 0.05f) {
-    return;
-  }
-
-  uint16_t cloudColour =
-      blend565(C_OCEAN, C_WHITE, (uint8_t)(visibility * 145.0f));
-
-  for (int8_t band = -3; band <= 3; band++) {
-    int16_t y = centreY + band * radius / 7;
-
-    float deltaY = (float)(y - centreY);
-
-    float inside = radius * radius - deltaY * deltaY;
-
-    if (inside <= 0.0f) {
-      continue;
-    }
-
-    int16_t halfWidth = (int16_t)sqrtf(inside);
-
-    int16_t left = centreX - halfWidth + 13 + (band & 1 ? 5 : 0);
-
-    int16_t width = halfWidth * 2 - 27;
-
-    if (width <= 8) {
-      continue;
-    }
-
-    for (int16_t segment = 0; segment < width; segment += 24) {
-      int16_t segmentWidth = minInt16((int16_t)14, (int16_t)(width - segment));
-
-      if (segmentWidth > 2 && ((segment / 24 + band + 9) % 3) != 1) {
-        frame.drawFastHLine(left + segment, y, segmentWidth, cloudColour);
-
-        if ((segment / 24) & 1) {
-          frame.drawFastHLine(left + segment + 3, y + 1,
-                              maxInt16((int16_t)1, segmentWidth - 5),
-                              cloudColour);
-        }
+    // A subtle limb only when the actual sides of the globe are visible.
+    if (radius < 220.0f) {
+      int16_t limbWidth = maxInt16(1, (int16_t)((right - left + 1) / 20));
+      if (rawLeft >= 0) {
+        frame.drawFastHLine(left, y, limbWidth,
+                            blend565(ocean, C_VOID, 48));
+      }
+      if (rawRight < SCREEN_W) {
+        frame.drawFastHLine(right - limbWidth + 1, y, limbWidth,
+                            blend565(ocean, C_OCEAN_LIGHT, 46));
       }
     }
   }
 }
 
-static void drawEarth(float altitude, FlightType flightType) {
-  // Gradual earth curvature: horizon starts bending, then sphere emerges.
-  float revealStart = 130.0f;
-  float revealEnd = (flightType == FlightType::TEST_FLIGHT) ? 420.0f : 780.0f;
-  float maxReveal = (flightType == FlightType::TEST_FLIGHT) ? 0.28f : 1.0f;
+static PointF projectEarthLandPoint(float sphereX, float sphereY,
+                                    float sphereRadius,
+                                    const EarthLandPoint &point,
+                                    float longitudeShift) {
+  float latitude = clampFloat(point.y, -0.92f, 0.92f);
+  float longitude = clampFloat(point.x + longitudeShift, -0.94f, 0.94f);
+  float rowProjection = sqrtf(maxFloat(0.0f, 1.0f - latitude * latitude));
 
-  float reveal = smoothStep(revealStart, revealEnd, altitude);
-  if (reveal <= 0.001f) return;
-
-  reveal *= maxReveal;
-
-  static constexpr int16_t EARTH_RADIUS = 188;
-
-  // Centre rises from far below as reveal increases
-  int16_t centreY = (int16_t)roundf(620.0f - reveal * 380.0f);
-  int16_t earthTop = centreY - EARTH_RADIUS;
-  if (earthTop > SCREEN_H + 10) return;
-
-  int16_t sampledY = earthTop;
-  if (sampledY < 0) sampledY = 0;
-  if (sampledY >= SCREEN_H) sampledY = SCREEN_H - 1;
-
-  uint16_t background = skyColourAtY(altitude, sampledY);
-
-  // Glow appears early and fades as surface becomes visible
-  float glowVisibility = smoothStep(0.0f, 0.25f, reveal);
-  uint16_t outerGlow = blend565(background, C_ATMOSPHERE, (uint8_t)(glowVisibility * 165.0f));
-  frame.drawCircle(SCREEN_W / 2, centreY, EARTH_RADIUS + 7, outerGlow);
-  frame.drawCircle(SCREEN_W / 2, centreY, EARTH_RADIUS + 6, outerGlow);
-  frame.drawCircle(SCREEN_W / 2, centreY, EARTH_RADIUS + 5, outerGlow);
-  frame.drawCircle(SCREEN_W / 2, centreY, EARTH_RADIUS + 4, outerGlow);
-
-  // Fill fraction: controls how much of the sphere (from top) is drawn
-  // At low reveal, only the very top arc is visible = curved horizon
-  float fillFraction = smoothStep(0.0f, 1.0f, reveal * 2.0f);
-  fillFraction = clamp01(fillFraction);
-
-  float surfaceVisibility = smoothStep(0.05f, 0.35f, reveal);
-  drawEarthOceanSphere(SCREEN_W / 2, centreY, EARTH_RADIUS, surfaceVisibility, fillFraction);
-
-  float continentVisibility = smoothStep(0.20f, 0.65f, reveal);
-  drawEarthContinents(SCREEN_W / 2, centreY, EARTH_RADIUS, continentVisibility, fillFraction);
-
-  float cloudVisibility = smoothStep(0.28f, 0.75f, reveal);
-  drawEarthCloudBands(SCREEN_W / 2, centreY, EARTH_RADIUS, cloudVisibility, fillFraction);
-
-  // Bright limb.
-  uint16_t limbColour = blend565(C_OCEAN_LIGHT, C_WHITE, (uint8_t)(glowVisibility * 150.0f));
-  frame.drawCircle(SCREEN_W / 2, centreY, EARTH_RADIUS, limbColour);
+  PointF result;
+  result.x = sphereX + longitude * sphereRadius * rowProjection;
+  result.y = sphereY + latitude * sphereRadius;
+  return result;
 }
 
-static void drawBackground(float visualAltitude, uint32_t now, FlightType flightType) {
+static void drawProjectedEarthLandMass(float sphereX, float sphereY,
+                                       float sphereRadius,
+                                       const EarthLandPoint *points,
+                                       uint8_t pointCount,
+                                       uint16_t targetColour,
+                                       float longitudeShift,
+                                       float visibility) {
+  if (pointCount < 3) {
+    return;
+  }
+
+  EarthLandPoint centre = { 0.0f, 0.0f };
+  for (uint8_t index = 0; index < pointCount; index++) {
+    centre.x += points[index].x;
+    centre.y += points[index].y;
+  }
+  centre.x /= pointCount;
+  centre.y /= pointCount;
+
+  PointF projectedCentre = projectEarthLandPoint(
+    sphereX, sphereY, sphereRadius, centre, longitudeShift);
+  uint16_t colour = blend565(C_OCEAN, targetColour,
+                              (uint8_t)(visibility * 225.0f));
+
+  for (uint8_t index = 0; index < pointCount; index++) {
+    uint8_t next = (uint8_t)((index + 1) % pointCount);
+    PointF first = projectEarthLandPoint(
+      sphereX, sphereY, sphereRadius, points[index], longitudeShift);
+    PointF second = projectEarthLandPoint(
+      sphereX, sphereY, sphereRadius, points[next], longitudeShift);
+
+    frame.fillTriangle((int16_t)roundf(projectedCentre.x),
+                       (int16_t)roundf(projectedCentre.y),
+                       (int16_t)roundf(first.x),
+                       (int16_t)roundf(first.y),
+                       (int16_t)roundf(second.x),
+                       (int16_t)roundf(second.y), colour);
+  }
+}
+
+static void drawProjectedEarthDetails(float centreX, float centreY,
+                                      float radius, float earthVisibility,
+                                      uint32_t now) {
+  float globeVisibility = 1.0f - smoothStep(88.0f, 215.0f, radius);
+  float detailVisibility = globeVisibility * earthVisibility;
+  if (detailVisibility <= 0.01f) {
+    return;
+  }
+
+  static const EarthLandPoint NORTH_AMERICA[] = {
+    { -0.72f, -0.43f }, { -0.52f, -0.52f }, { -0.31f, -0.42f },
+    { -0.20f, -0.25f }, { -0.31f, -0.08f }, { -0.47f, -0.04f },
+    { -0.62f, -0.18f }, { -0.76f, -0.24f }
+  };
+  static const EarthLandPoint CENTRAL_AMERICA[] = {
+    { -0.45f, -0.08f }, { -0.28f, -0.02f }, { -0.20f, 0.08f },
+    { -0.30f, 0.14f }, { -0.47f, 0.05f }
+  };
+  static const EarthLandPoint SOUTH_AMERICA[] = {
+    { -0.31f, 0.10f }, { -0.17f, 0.16f }, { -0.12f, 0.32f },
+    { -0.23f, 0.58f }, { -0.36f, 0.45f }, { -0.42f, 0.22f }
+  };
+  static const EarthLandPoint EURASIA[] = {
+    { -0.10f, -0.46f }, { 0.12f, -0.55f }, { 0.38f, -0.49f },
+    { 0.66f, -0.34f }, { 0.72f, -0.16f }, { 0.49f, -0.08f },
+    { 0.34f, 0.02f }, { 0.12f, -0.04f }, { -0.03f, -0.17f },
+    { -0.18f, -0.28f }
+  };
+  static const EarthLandPoint AFRICA[] = {
+    { 0.02f, -0.12f }, { 0.22f, -0.10f }, { 0.34f, 0.06f },
+    { 0.25f, 0.35f }, { 0.09f, 0.52f }, { -0.04f, 0.27f },
+    { -0.12f, 0.02f }
+  };
+  static const EarthLandPoint AUSTRALIA[] = {
+    { 0.47f, 0.31f }, { 0.68f, 0.28f }, { 0.76f, 0.43f },
+    { 0.58f, 0.54f }, { 0.43f, 0.44f }
+  };
+  static const EarthLandPoint GREENLAND[] = {
+    { -0.31f, -0.67f }, { -0.18f, -0.72f }, { -0.12f, -0.58f },
+    { -0.25f, -0.51f }
+  };
+
+  float longitudeShift = sinf(now * 0.000055f) * 0.055f;
+  drawProjectedEarthLandMass(centreX, centreY, radius,
+    NORTH_AMERICA, sizeof(NORTH_AMERICA) / sizeof(NORTH_AMERICA[0]),
+    C_LAND, longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius,
+    CENTRAL_AMERICA, sizeof(CENTRAL_AMERICA) / sizeof(CENTRAL_AMERICA[0]),
+    C_LAND_LIGHT, longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius,
+    SOUTH_AMERICA, sizeof(SOUTH_AMERICA) / sizeof(SOUTH_AMERICA[0]),
+    C_LAND_DARK, longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius,
+    EURASIA, sizeof(EURASIA) / sizeof(EURASIA[0]),
+    C_LAND_LIGHT, longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius,
+    AFRICA, sizeof(AFRICA) / sizeof(AFRICA[0]),
+    C_LAND, longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius,
+    AUSTRALIA, sizeof(AUSTRALIA) / sizeof(AUSTRALIA[0]),
+    C_LAND_DARK, longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius,
+    GREENLAND, sizeof(GREENLAND) / sizeof(GREENLAND[0]),
+    C_LAND_LIGHT, longitudeShift, detailVisibility);
+
+  float cloudVisibility = globeVisibility * globeVisibility * earthVisibility;
+  if (cloudVisibility <= 0.03f) {
+    return;
+  }
+
+  uint16_t cloudColour = blend565(C_OCEAN_LIGHT, C_WHITE,
+                                   (uint8_t)(cloudVisibility * 145.0f));
+  static const float CLOUD_LATITUDES[] = { -0.45f, -0.16f, 0.13f, 0.39f };
+
+  for (uint8_t band = 0; band < 4; band++) {
+    float phase = now * 0.00022f + band * 1.73f;
+    bool previousValid = false;
+    int16_t previousX = 0;
+    int16_t previousY = 0;
+
+    int16_t xStart = maxInt16(0, (int16_t)(centreX - radius * 0.88f));
+    int16_t xEnd = minInt16(SCREEN_W - 1,
+                            (int16_t)(centreX + radius * 0.88f));
+
+    for (int16_t x = xStart; x <= xEnd; x += 2) {
+      float nx = ((float)x - centreX) / radius;
+      float inside = 1.0f - nx * nx;
+      if (inside <= 0.0f) {
+        previousValid = false;
+        continue;
+      }
+
+      float wave = sinf(nx * 7.0f + phase) * radius * 0.025f +
+                   sinf(nx * 15.0f - phase * 0.7f) * radius * 0.012f;
+      int16_t y = (int16_t)roundf(centreY +
+                                   CLOUD_LATITUDES[band] * radius +
+                                   nx * radius * 0.055f + wave);
+      float dy = (float)y - centreY;
+      bool insideSphere = nx * nx + (dy * dy) / (radius * radius) < 0.94f;
+      bool gap = ((x + band * 19 + (int16_t)(phase * 7.0f)) % 23) < 6;
+
+      if (!insideSphere || gap) {
+        previousValid = false;
+        continue;
+      }
+
+      if (previousValid) {
+        frame.drawLine(previousX, previousY, x, y, cloudColour);
+      } else {
+        frame.drawPixel(x, y, cloudColour);
+      }
+
+      if ((x + band) % 6 == 0) {
+        frame.drawPixel(x, y + 1, cloudColour);
+      }
+
+      previousValid = true;
+      previousX = x;
+      previousY = y;
+    }
+  }
+}
+
+static void drawProjectedEarthAtmosphere(float centreX, float centreY,
+                                         float radius, float earthVisibility,
+                                         float skyAltitude) {
+  float thickness = radius > 240.0f ? 1.0f : 1.35f;
+  float outerRadius = radius + thickness;
+  float innerRadius = maxFloat(1.0f, radius - 0.5f);
+  int16_t startY = maxInt16(0, (int16_t)floorf(centreY - outerRadius));
+  int16_t endY = minInt16(SCREEN_H - 1,
+                          (int16_t)ceilf(centreY + outerRadius));
+  uint8_t amount = (uint8_t)(clamp01(earthVisibility) * 125.0f);
+
+  for (int16_t y = startY; y <= endY; y++) {
+    int16_t outerLeft;
+    int16_t outerRight;
+    if (!projectedEarthBoundsAtY(centreX, centreY, outerRadius, y,
+                                 outerLeft, outerRight)) {
+      continue;
+    }
+
+    uint16_t colour = blend565(skyColourAtY(skyAltitude, y),
+                                C_ATMOSPHERE, amount);
+    int16_t innerLeft;
+    int16_t innerRight;
+    if (!projectedEarthBoundsAtY(centreX, centreY, innerRadius, y,
+                                 innerLeft, innerRight)) {
+      frame.drawFastHLine(outerLeft, y, outerRight - outerLeft + 1, colour);
+      continue;
+    }
+
+    if (innerLeft > outerLeft) {
+      frame.drawFastHLine(outerLeft, y, innerLeft - outerLeft, colour);
+    }
+    if (outerRight > innerRight) {
+      frame.drawFastHLine(innerRight + 1, y, outerRight - innerRight, colour);
+    }
+  }
+}
+
+static void drawEarth(float earthAltitude, float skyAltitude,
+                      FlightType flightType, uint32_t now) {
+  // Earth is projected directly into screen space from world/display altitude;
+  // it is independent of the rocket-local cinematic scale.
+  (void)flightType;
+
+  SceneProjection projection = sceneProjectionModel.atAltitude(earthAltitude);
+  float radius = projection.earthRadius;
+  float centreY = projection.earthCentreY;
+  float centreX = SCREEN_W * 0.5f;
+
+  drawProjectedEarthOcean(centreX, centreY, radius, 1.0f,
+                          skyAltitude);
+  drawProjectedEarthDetails(centreX, centreY, radius, 1.0f, now);
+  drawProjectedEarthAtmosphere(centreX, centreY, radius, 1.0f,
+                               skyAltitude);
+}
+
+static void drawBackground(float visualAltitude, float earthAltitude,
+                           uint32_t now, FlightType flightType,
+                           bool showEarth) {
   drawSkyGradient(visualAltitude);
   drawStars(visualAltitude);
   drawSun(visualAltitude);
+  if (showEarth) {
+    drawEarth(earthAltitude, visualAltitude, flightType, now);
+  }
   drawMountains(visualAltitude);
   drawClouds(visualAltitude, now);
-  drawEarth(visualAltitude, flightType);
 }
 
 // =============================================================================
@@ -1789,13 +2201,12 @@ static void drawLaunchLight(int16_t x, int16_t y, bool lit,
 }
 
 static void drawLaunchPad(float cameraAltitude, uint32_t now, bool armed) {
-  float padYFloat = 274.0f + cameraAltitude * WORLD_PIXELS_PER_ALTITUDE;
-
-  if (padYFloat > SCREEN_H + 110.0f) {
+  launchPad.place(cameraAltitude);
+  if (!launchPad.isVisibleOnScreen()) {
     return;
   }
 
-  int16_t padY = (int16_t)padYFloat;
+  int16_t padY = (int16_t)launchPad.y();
 
   bool slowBlink = ((now / 480) & 1U) == 0;
 
@@ -1905,6 +2316,40 @@ static void drawLaunchPad(float cameraAltitude, uint32_t now, bool armed) {
 // Rocket drawing
 // =============================================================================
 
+static int16_t scaledSize(float size, float scale, int16_t minimum = 1) {
+  return maxInt16(minimum, (int16_t)roundf(size * scale));
+}
+
+static int16_t rocketPitchOffset(float y, float pivotY, float pitchRadians) {
+  return (int16_t)roundf((pivotY - y) * tanf(pitchRadians));
+}
+
+static void drawPitchedHLine(int16_t x, int16_t y, int16_t width,
+                             float pivotY, float pitchRadians,
+                             uint16_t colour) {
+  frame.drawFastHLine(x + rocketPitchOffset(y, pivotY, pitchRadians),
+                      y, width, colour);
+}
+
+static void fillPitchedRect(int16_t x, int16_t y, int16_t width,
+                            int16_t height, float pivotY, float pitchRadians,
+                            uint16_t colour) {
+  for (int16_t row = 0; row < height; row++) {
+    drawPitchedHLine(x, y + row, width, pivotY, pitchRadians, colour);
+  }
+}
+
+static void fillPitchedBody(int16_t x, int16_t y, int16_t width,
+                            int16_t height, float pivotY, float pitchRadians,
+                            uint16_t colour) {
+  for (int16_t row = 0; row < height; row++) {
+    int16_t inset = (row == 0 || row == height - 1) ? 1 : 0;
+    drawPitchedHLine(x + inset, y + row,
+                     maxInt16(1, width - inset * 2),
+                     pivotY, pitchRadians, colour);
+  }
+}
+
 static void drawPayload(const RocketGeometry &geometry, bool recoveryCapsule) {
   int16_t x = (int16_t)roundf(geometry.payloadX);
 
@@ -1915,86 +2360,140 @@ static void drawPayload(const RocketGeometry &geometry, bool recoveryCapsule) {
   int16_t height = (int16_t)roundf(geometry.payloadHeight);
 
   int16_t centreX = x + width / 2;
+  float scale = geometry.visualScale;
+  float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
+  float pitch = geometry.pitchRadians;
+  int16_t one = scaledSize(1.0f, scale);
+  int16_t two = scaledSize(2.0f, scale);
+  int16_t three = scaledSize(3.0f, scale);
+  int16_t four = scaledSize(4.0f, scale);
+  int16_t five = scaledSize(5.0f, scale);
+  int16_t domeY = y + scaledSize(8.0f, scale);
 
-  frame.fillCircle(centreX, y + 8, width / 2 - 2, C_PAPER);
+  frame.fillCircle(centreX + rocketPitchOffset(domeY, pivotY, pitch), domeY,
+                   maxInt16(2, width / 2 - two), C_PAPER);
 
-  frame.fillRect(x + 2, y + 8, width - 4, height - 8, C_PAPER);
+  fillPitchedRect(x + two, domeY, maxInt16(2, width - four),
+                  maxInt16(2, y + height - domeY), pivotY, pitch, C_PAPER);
 
-  frame.fillRect(x + 3, y + 7, 3, height - 10, C_HIGHLIGHT);
+  fillPitchedRect(x + three, y + scaledSize(7.0f, scale), three,
+                  maxInt16(2, height - scaledSize(10.0f, scale)),
+                  pivotY, pitch, C_HIGHLIGHT);
 
-  frame.fillRect(x + width - 5, y + 8, 2, height - 10, C_METAL);
+  fillPitchedRect(x + width - five, domeY, two,
+                  maxInt16(2, height - scaledSize(10.0f, scale)),
+                  pivotY, pitch, C_METAL);
 
-  frame.fillRoundRect(centreX - 4, y + 8, 8, 6, 2, C_GLASS);
+  int16_t windowWidth = scaledSize(8.0f, scale, 4);
+  int16_t windowHeight = scaledSize(6.0f, scale, 3);
+  int16_t windowShift = rocketPitchOffset(domeY + windowHeight / 2,
+                                           pivotY, pitch);
+  frame.fillRoundRect(centreX - windowWidth / 2 + windowShift, domeY,
+                      windowWidth,
+                      windowHeight, one, C_GLASS);
 
-  frame.drawPixel(centreX - 2, y + 9, C_CYAN);
+  int16_t detailShift = rocketPitchOffset(domeY + one, pivotY, pitch);
+  frame.drawPixel(centreX - two + detailShift, domeY + one, C_CYAN);
 
-  frame.drawPixel(centreX - 1, y + 9, C_WHITE);
+  frame.drawPixel(centreX - one + detailShift, domeY + one, C_WHITE);
 
-  frame.fillRect(x + 3, y + height - 5, width - 6, 4,
-                 recoveryCapsule ? C_CYAN : C_PURPLE);
+  fillPitchedRect(x + three, y + height - five,
+                  maxInt16(2, width - scaledSize(6.0f, scale)), four,
+                  pivotY, pitch, recoveryCapsule ? C_CYAN : C_PURPLE);
 
-  frame.drawFastHLine(x + 2, y + height - 1, width - 4, C_METAL_DARK);
+  drawPitchedHLine(x + two, y + height - one,
+                   maxInt16(2, width - four), pivotY, pitch, C_METAL_DARK);
 }
 
 static void drawFuelWindow(int16_t stageX, int16_t stageY, int16_t stageWidth,
                            int16_t stageHeight, float fuelFraction, bool active,
+                           float scale, float pivotY, float pitch,
                            uint32_t now) {
-  int16_t windowX = stageX + stageWidth / 2 - 3;
+  int16_t one = scaledSize(1.0f, scale);
+  int16_t two = scaledSize(2.0f, scale);
+  int16_t windowWidth = scaledSize(6.0f, scale, 3);
+  int16_t windowX = stageX + stageWidth / 2 - windowWidth / 2;
 
-  int16_t windowY = stageY + 8;
+  int16_t windowY = stageY + scaledSize(8.0f, scale);
 
-  int16_t windowHeight = stageHeight - 17;
+  int16_t windowHeight = stageHeight - scaledSize(17.0f, scale);
 
-  windowHeight = maxInt16((int16_t)8, windowHeight);
+  windowHeight = maxInt16(scaledSize(8.0f, scale, 4), windowHeight);
 
-  frame.fillRoundRect(windowX, windowY, 6, windowHeight, 2, C_GLASS_EDGE);
+  fillPitchedRect(windowX, windowY, windowWidth, windowHeight,
+                  pivotY, pitch, C_GLASS_EDGE);
 
-  frame.fillRect(windowX + 1, windowY + 1, 4, windowHeight - 2, C_GLASS);
+  fillPitchedRect(windowX + one, windowY + one,
+                  maxInt16(1, windowWidth - two),
+                  maxInt16(1, windowHeight - two), pivotY, pitch, C_GLASS);
 
-  int16_t insideHeight = windowHeight - 2;
+  int16_t insideHeight = maxInt16(1, windowHeight - two);
 
   int16_t fuelHeight = (int16_t)roundf(insideHeight * clamp01(fuelFraction));
 
   if (fuelHeight > 0) {
-    int16_t fuelY = windowY + 1 + insideHeight - fuelHeight;
+    int16_t fuelY = windowY + one + insideHeight - fuelHeight;
 
-    frame.fillRect(windowX + 1, fuelY, 4, fuelHeight, C_FUEL);
+    fillPitchedRect(windowX + one, fuelY,
+                    maxInt16(1, windowWidth - two), fuelHeight,
+                    pivotY, pitch, C_FUEL);
 
-    frame.drawFastHLine(windowX + 1, fuelY, 4, C_WHITE);
+    drawPitchedHLine(windowX + one, fuelY,
+                     maxInt16(1, windowWidth - two), pivotY, pitch, C_WHITE);
   }
 
-  frame.drawFastVLine(windowX + 1, windowY + 2,
-                      maxInt16((int16_t)1, windowHeight / 3),
-                      C565(112, 168, 179));
+  fillPitchedRect(windowX + one, windowY + two, one,
+                  maxInt16((int16_t)1, windowHeight / 3),
+                  pivotY, pitch, C565(112, 168, 179));
 
   if (active && fuelFraction < 0.16f && ((now / 110) & 1U) == 0) {
-    frame.drawRoundRect(windowX - 1, windowY - 1, 8, windowHeight + 2, 2,
-                        C_RED);
+    int16_t shift = rocketPitchOffset(windowY + windowHeight / 2,
+                                      pivotY, pitch);
+    frame.drawRoundRect(windowX - one + shift, windowY - one,
+                        windowWidth + two, windowHeight + two, one, C_RED);
   }
 }
 
 static void drawEngineAssembly(int16_t centreX, int16_t bottomY,
-                               int16_t stageWidth) {
+                               int16_t stageWidth, float scale,
+                               float pivotY, float pitch) {
   int16_t bellWidth = stageWidth / 3;
 
-  bellWidth = maxInt16((int16_t)6, bellWidth);
+  bellWidth = maxInt16(scaledSize(6.0f, scale, 3), bellWidth);
+  int16_t two = scaledSize(2.0f, scale);
+  int16_t three = scaledSize(3.0f, scale);
+  int16_t five = scaledSize(5.0f, scale);
+  int16_t seven = scaledSize(7.0f, scale);
 
-  frame.fillTriangle(centreX - bellWidth / 2, bottomY - 2,
-                     centreX + bellWidth / 2, bottomY - 2, centreX, bottomY + 5,
+  int16_t topShift = rocketPitchOffset(bottomY - two, pivotY, pitch);
+  int16_t tipShift = rocketPitchOffset(bottomY + five, pivotY, pitch);
+  frame.fillTriangle(centreX - bellWidth / 2 + topShift, bottomY - two,
+                     centreX + bellWidth / 2 + topShift, bottomY - two,
+                     centreX + tipShift, bottomY + five,
                      C_METAL_DARK);
 
-  frame.drawFastHLine(centreX - bellWidth / 2, bottomY - 2, bellWidth, C_METAL);
+  drawPitchedHLine(centreX - bellWidth / 2, bottomY - two, bellWidth,
+                   pivotY, pitch, C_METAL);
 
-  frame.drawLine(centreX - bellWidth / 2, bottomY - 3, centreX - bellWidth,
-                 bottomY - 7, C_METAL);
+  frame.drawLine(centreX - bellWidth / 2 +
+                   rocketPitchOffset(bottomY - three, pivotY, pitch),
+                 bottomY - three,
+                 centreX - bellWidth +
+                   rocketPitchOffset(bottomY - seven, pivotY, pitch),
+                 bottomY - seven, C_METAL);
 
-  frame.drawLine(centreX + bellWidth / 2, bottomY - 3, centreX + bellWidth,
-                 bottomY - 7, C_METAL);
+  frame.drawLine(centreX + bellWidth / 2 +
+                   rocketPitchOffset(bottomY - three, pivotY, pitch),
+                 bottomY - three,
+                 centreX + bellWidth +
+                   rocketPitchOffset(bottomY - seven, pivotY, pitch),
+                 bottomY - seven, C_METAL);
 }
 
 static void drawStageBody(const StageDefinition &definition,
                           const StageGeometry &geometry, float fuelFraction,
-                          bool active, uint32_t now) {
+                          bool active, float scale, float pivotY, float pitch,
+                          uint32_t now) {
   int16_t x = (int16_t)roundf(geometry.x);
 
   int16_t y = (int16_t)roundf(geometry.y);
@@ -2002,22 +2501,30 @@ static void drawStageBody(const StageDefinition &definition,
   int16_t width = (int16_t)roundf(geometry.width);
 
   int16_t height = (int16_t)roundf(geometry.height);
+  int16_t one = scaledSize(1.0f, scale);
+  int16_t two = scaledSize(2.0f, scale);
+  int16_t three = scaledSize(3.0f, scale);
+  int16_t four = scaledSize(4.0f, scale);
+  int16_t five = scaledSize(5.0f, scale);
 
-  frame.fillRoundRect(x + 2, y + 2, width, height, 2, C_BLACK);
+  fillPitchedBody(x + two, y + two, width, height,
+                  pivotY, pitch, C_BLACK);
 
-  frame.fillRoundRect(x, y, width, height, 2, C_PAPER);
+  fillPitchedBody(x, y, width, height, pivotY, pitch, C_PAPER);
 
-  frame.fillRect(x + 2, y + 2, maxInt16((int16_t)2, width / 6), height - 4,
-                 C_HIGHLIGHT);
+  fillPitchedRect(x + two, y + two, maxInt16(two, width / 6),
+                  maxInt16(2, height - four), pivotY, pitch, C_HIGHLIGHT);
 
-  frame.fillRect(x + width - 4, y + 2, 2, height - 4, C_METAL);
+  fillPitchedRect(x + width - four, y + two, two,
+                  maxInt16(2, height - four), pivotY, pitch, C_METAL);
 
-  int16_t bandY = y + maxInt16((int16_t)5, height / 5);
+  int16_t bandY = y + maxInt16(five, height / 5);
 
-  frame.fillRect(x, bandY, width, 4, definition.bandColour);
+  fillPitchedRect(x, bandY, width, four, pivotY, pitch,
+                  definition.bandColour);
 
-  frame.drawFastHLine(x, bandY, width,
-                      blend565(definition.bandColour, C_WHITE, 70));
+  drawPitchedHLine(x, bandY, width, pivotY, pitch,
+                   blend565(definition.bandColour, C_WHITE, 70));
 
   uint16_t collarColour = C_BORDER;
 
@@ -2031,64 +2538,141 @@ static void drawStageBody(const StageDefinition &definition,
     }
   }
 
-  frame.fillRect(x - 2, y - 2, width + 4, 3, collarColour);
+  fillPitchedRect(x - two, y - two, width + four, three,
+                  pivotY, pitch, collarColour);
 
-  frame.drawFastHLine(x - 1, y + 1, width + 2, C_METAL_DARK);
+  drawPitchedHLine(x - one, y + one, width + two,
+                   pivotY, pitch, C_METAL_DARK);
 
-  frame.fillRect(x, y + height - 5, width, 5, C_METAL_DARK);
+  fillPitchedRect(x, y + height - five, width, five,
+                  pivotY, pitch, C_METAL_DARK);
 
-  frame.drawFastHLine(x + 2, y + height - 5, width - 4, C_METAL);
+  drawPitchedHLine(x + two, y + height - five,
+                   maxInt16(2, width - four), pivotY, pitch, C_METAL);
 
-  for (int16_t rivetY = y + 12; rivetY < y + height - 8; rivetY += 13) {
-    frame.drawPixel(x + 2, rivetY, C_METAL_DARK);
+  for (int16_t rivetY = y + scaledSize(12.0f, scale);
+       rivetY < y + height - scaledSize(8.0f, scale);
+       rivetY += scaledSize(13.0f, scale)) {
+    int16_t shift = rocketPitchOffset(rivetY, pivotY, pitch);
+    frame.drawPixel(x + two + shift, rivetY, C_METAL_DARK);
 
-    frame.drawPixel(x + width - 3, rivetY, C_METAL_DARK);
+    frame.drawPixel(x + width - three + shift, rivetY, C_METAL_DARK);
   }
 
-  drawFuelWindow(x, y, width, height, fuelFraction, active, now);
+  drawFuelWindow(x, y, width, height, fuelFraction, active, scale,
+                 pivotY, pitch, now);
 
   if (active) {
-    drawEngineAssembly(x + width / 2, y + height, width);
+    drawEngineAssembly(x + width / 2, y + height, width, scale,
+                       pivotY, pitch);
   }
 }
 
-static void drawEngineFlame(const StageGeometry &activeGeometry, uint32_t now) {
+static void drawEngineFlame(const StageGeometry &activeGeometry,
+                            float fuelFraction, float scale, float pivotY,
+                            float pitch, uint32_t now) {
   int16_t centreX =
-      (int16_t)roundf(activeGeometry.x + activeGeometry.width * 0.5f);
-
+    (int16_t)roundf(activeGeometry.x + activeGeometry.width * 0.5f);
   int16_t nozzleY =
-      (int16_t)roundf(activeGeometry.y + activeGeometry.height + 4.0f);
+    (int16_t)roundf(activeGeometry.y + activeGeometry.height) +
+    scaledSize(5.0f, scale);
 
-  float flicker = sinf(now * 0.045f) * 0.13f + sinf(now * 0.083f) * 0.08f;
+  float flicker = sinf(now * 0.045f) * 0.08f +
+                  sinf(now * 0.081f) * 0.04f;
+  float burnoutTaper = smoothStep(0.0f, 0.13f, fuelFraction);
+  float power = clampFloat((1.0f + flicker) * burnoutTaper, 0.0f, 1.12f);
 
-  float power = clampFloat(1.0f + flicker, 0.75f, 1.24f);
+  if (power <= 0.04f) {
+    return;
+  }
 
-  int16_t outerLength =
-      (int16_t)roundf((24.0f + activeGeometry.width * 0.31f) * power);
+  int16_t outerLength = maxInt16(scaledSize(10.0f, scale, 6),
+    (int16_t)roundf((16.0f * scale + activeGeometry.width * 0.55f) * power));
+  int16_t outerWidth = maxInt16(scaledSize(5.0f, scale, 3),
+    (int16_t)roundf(activeGeometry.width * 0.38f));
+  int16_t baseHalfWidth = maxInt16(1, outerWidth / 4);
+  int16_t shoulderHalfWidth = maxInt16(2, outerWidth / 2);
+  float tipDrift = (sinf(now * 0.031f) + sinf(now * 0.017f)) *
+                   0.75f * scale;
 
-  int16_t outerWidth = (int16_t)(activeGeometry.width * 0.52f);
+  // Rocket-local scanlines form a rounded, asymmetric envelope. Width stays
+  // stable; only the taper, tip and one-pixel edges flicker.
+  for (int16_t row = 0; row <= outerLength; row++) {
+    float amount = (float)row / maxFloat(1.0f, (float)outerLength);
+    float bulge = sqrtf(maxFloat(0.0f, sinf(amount * 3.1415926f)));
+    int16_t halfWidth = maxInt16(1, (int16_t)roundf(
+      baseHalfWidth * (1.0f - amount) + shoulderHalfWidth * bulge));
+    int16_t centreDrift = (int16_t)roundf(tipDrift * amount +
+      sinf(now * 0.023f + row * 0.61f) * 0.45f * amount);
+    int16_t edgeVariation = ((row + (int16_t)(now / 73U)) % 7 == 0) ? 1 : 0;
+    int16_t axisShift = rocketPitchOffset(nozzleY + row, pivotY, pitch);
+    frame.drawFastHLine(centreX + axisShift + centreDrift - halfWidth,
+                        nozzleY + row, halfWidth * 2 + 1 + edgeVariation,
+                        C_RED);
+  }
 
-  outerWidth = maxInt16((int16_t)8, outerWidth);
+  int16_t middleLength = maxInt16(4, outerLength * 3 / 4);
+  int16_t middleShoulder = maxInt16(1, outerWidth / 3);
+  for (int16_t row = 0; row <= middleLength; row++) {
+    float amount = (float)row / maxFloat(1.0f, (float)middleLength);
+    float bulge = maxFloat(0.0f, sinf(amount * 3.1415926f));
+    int16_t halfWidth = maxInt16(1, (int16_t)roundf(
+      baseHalfWidth * (1.0f - amount) + middleShoulder * bulge));
+    int16_t centreDrift = (int16_t)roundf(tipDrift * amount * 0.45f);
+    int16_t axisShift = rocketPitchOffset(nozzleY + row, pivotY, pitch);
+    frame.drawFastHLine(centreX + axisShift + centreDrift - halfWidth,
+                        nozzleY + row, halfWidth * 2 + 1, C_ORANGE);
+  }
 
-  frame.fillTriangle(centreX - outerWidth / 2, nozzleY,
-                     centreX + outerWidth / 2, nozzleY, centreX,
-                     nozzleY + outerLength + 5, C_RED);
+  int16_t coreLength = maxInt16(3, outerLength / 3);
+  int16_t coreHalfWidth = maxInt16(1, scaledSize(2.0f, scale) / 2);
+  for (int16_t row = 0; row < coreLength; row++) {
+    int16_t halfWidth = row < coreLength / 2 ? coreHalfWidth : 0;
+    int16_t axisShift = rocketPitchOffset(nozzleY + row, pivotY, pitch);
+    frame.drawFastHLine(centreX + axisShift - halfWidth, nozzleY + row,
+                        halfWidth * 2 + 1,
+                        row < coreLength * 2 / 3 ? C_WHITE : C_YELLOW);
+  }
+}
 
-  frame.fillTriangle(centreX - outerWidth / 2 + 2, nozzleY,
-                     centreX + outerWidth / 2 - 2, nozzleY, centreX,
-                     nozzleY + outerLength, C_ORANGE);
+static void updateRocketBounds(RocketGeometry &geometry, bool engineOn) {
+  float left = geometry.payloadX;
+  float right = geometry.payloadX + geometry.payloadWidth;
+  float maximumStageWidth = 0.0f;
 
-  frame.fillTriangle(centreX - outerWidth / 4, nozzleY + 1,
-                     centreX + outerWidth / 4, nozzleY + 1, centreX,
-                     nozzleY + outerLength * 2 / 3, C_YELLOW);
+  for (uint8_t index = 0; index < geometry.stageCount; index++) {
+    const StageGeometry &stage = geometry.stages[index];
+    left = minFloat(left, stage.x);
+    right = maxFloat(right, stage.x + stage.width);
+    maximumStageWidth = maxFloat(maximumStageWidth, stage.width);
+  }
 
-  frame.fillTriangle(centreX - 2, nozzleY + 1, centreX + 2, nozzleY + 1,
-                     centreX, nozzleY + outerLength / 3, C_WHITE);
+  float bottomMargin = 7.0f * geometry.visualScale;
+  if (engineOn && geometry.stageCount > 0) {
+    // Covers the longest permitted flame envelope, including pitch offset.
+    bottomMargin += maximumStageWidth * 0.70f +
+                    22.0f * geometry.visualScale;
+  }
+
+  float totalHeight = geometry.bottomY - geometry.noseY + bottomMargin;
+  float pitchReach = fabsf(tanf(geometry.pitchRadians)) * totalHeight;
+  float sideMargin = 3.0f * geometry.visualScale + pitchReach;
+
+  geometry.setBoundingBox(left - sideMargin,
+                          geometry.noseY - 3.0f * geometry.visualScale,
+                          right + sideMargin,
+                          geometry.bottomY + bottomMargin);
 }
 
 static void drawRocket(const MissionDefinition &mission,
-                       const RocketGeometry &geometry, uint8_t activeStage,
+                       RocketGeometry &geometry, uint8_t activeStage,
                        float activeFuel, bool engineOn, uint32_t now) {
+  updateRocketBounds(geometry, engineOn);
+  if (!geometry.isVisibleOnScreen()) {
+    return;
+  }
+
+  float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
   drawPayload(geometry, mission.recoverCapsule);
 
   for (uint8_t index = 0; index < geometry.stageCount; index++) {
@@ -2099,11 +2683,14 @@ static void drawRocket(const MissionDefinition &mission,
     float fuel = active ? activeFuel : 1.0f;
 
     drawStageBody(mission.stages[stageGeometry.sourceIndex], stageGeometry,
-                  fuel, active, now);
+                  fuel, active, geometry.visualScale, pivotY,
+                  geometry.pitchRadians, now);
   }
 
   if (engineOn && geometry.stageCount > 0) {
-    drawEngineFlame(geometry.stages[geometry.stageCount - 1], now);
+    drawEngineFlame(geometry.stages[geometry.stageCount - 1], activeFuel,
+                    geometry.visualScale, pivotY,
+                    geometry.pitchRadians, now);
   }
 }
 
@@ -2122,23 +2709,28 @@ static void setFeedback(const char *message, uint16_t colour, float duration) {
 
 static void createWholeDetachedStage(const StageDefinition &definition,
                                      const StageGeometry &geometry,
-                                     float fuelFraction) {
+                                     float fuelFraction, float pivotY,
+                                     float pitch) {
   int16_t bandPosition =
-      maxInt16((int16_t)5, (int16_t)(geometry.height / 5.0f));
+    maxInt16((int16_t)5, (int16_t)(geometry.height / 5.0f));
+  float side = randomGenerator.chance(0.5f) ? -1.0f : 1.0f;
 
-  createFragment(FragmentType::WHOLE_STAGE, geometry.x + geometry.width * 0.5f,
-                 geometry.y + geometry.height * 0.5f, geometry.width,
-                 geometry.height, randomGenerator.range(-10.0f, 10.0f),
-                 randomGenerator.range(18.0f, 29.0f), 0.0f,
-                 randomGenerator.range(-1.65f, 1.65f), 4.8f,
-                 definition.bandColour, fuelFraction, (int8_t)bandPosition);
+  Fragment *stage = createFragment(
+    FragmentType::WHOLE_STAGE,
+    geometry.x + geometry.width * 0.5f +
+      rocketPitchOffset(geometry.y + geometry.height * 0.5f,
+                        pivotY, pitch),
+    geometry.y + geometry.height * 0.5f,
+    geometry.width, geometry.height,
+    side * randomGenerator.range(6.0f, 11.0f), 0.0f,
+    pitch, side * randomGenerator.range(0.28f, 0.52f), 5.2f,
+    definition.bandColour, fuelFraction, (int8_t)bandPosition);
 
-  createFragment(FragmentType::ENGINE, geometry.x + geometry.width * 0.5f,
-                 geometry.y + geometry.height + 2.0f,
-                 maxFloat(7.0f, geometry.width * 0.34f), 7.0f,
-                 randomGenerator.range(-13.0f, 13.0f),
-                 randomGenerator.range(22.0f, 34.0f), 0.0f,
-                 randomGenerator.range(-2.1f, 2.1f), 3.2f, C_METAL, 0.0f, -1);
+  // Screen Y is shifted by camera movement; the stored world velocity supplies
+  // the opposite half of that transform and preserves ascent momentum.
+  stage->cameraTracked = true;
+  stage->worldVelocity = game.velocity - randomGenerator.range(1.8f, 3.0f);
+  stage->cameraScale = currentRocketVisualScale();
 }
 
 static void beginExplosion(const char *reason) {
@@ -2149,10 +2741,12 @@ static void beginExplosion(const char *reason) {
   RocketGeometry geometry;
   buildCurrentRocketGeometry(geometry);
 
-  game.explosionX = SCREEN_W * 0.5f;
-
   game.explosionY =
-      geometry.noseY + (geometry.bottomY - geometry.noseY) * 0.62f;
+    geometry.noseY + (geometry.bottomY - geometry.noseY) * 0.62f;
+  game.explosionX = geometry.payloadX + geometry.payloadWidth * 0.5f +
+    rocketPitchOffset(
+    game.explosionY, (geometry.noseY + geometry.bottomY) * 0.5f,
+    geometry.pitchRadians);
 
   strncpy(game.failureReason, reason, sizeof(game.failureReason) - 1);
 
@@ -2167,23 +2761,23 @@ static void beginExplosion(const char *reason) {
   game.shake = 10.0f;
 
   createFragment(
-      FragmentType::CAPSULE, geometry.payloadX + geometry.payloadWidth * 0.5f,
-      geometry.payloadY + geometry.payloadHeight * 0.5f, geometry.payloadWidth,
-      geometry.payloadHeight, randomGenerator.range(-48.0f, 48.0f),
-      randomGenerator.range(-92.0f, -34.0f),
-      randomGenerator.range(-0.25f, 0.25f), randomGenerator.range(-4.4f, 4.4f),
-      3.7f, currentMission().recoverCapsule ? C_CYAN : C_PURPLE, 0.0f, -1);
+    FragmentType::CAPSULE, geometry.payloadX + geometry.payloadWidth * 0.5f,
+    geometry.payloadY + geometry.payloadHeight * 0.5f, geometry.payloadWidth,
+    geometry.payloadHeight, randomGenerator.range(-48.0f, 48.0f),
+    randomGenerator.range(-92.0f, -34.0f),
+    randomGenerator.range(-0.25f, 0.25f), randomGenerator.range(-4.4f, 4.4f),
+    3.7f, currentMission().recoverCapsule ? C_CYAN : C_PURPLE, 0.0f, -1);
 
   for (uint8_t geometryIndex = 0; geometryIndex < geometry.stageCount;
        geometryIndex++) {
     const StageGeometry &stageGeometry = geometry.stages[geometryIndex];
 
     const StageDefinition &definition =
-        currentMission().stages[stageGeometry.sourceIndex];
+      currentMission().stages[stageGeometry.sourceIndex];
 
     float stageFuel = stageGeometry.sourceIndex == game.activeStage
-                          ? currentFuelFraction()
-                          : 1.0f;
+                        ? currentFuelFraction()
+                        : 1.0f;
 
     static constexpr uint8_t SLICE_COUNT = 3;
 
@@ -2203,7 +2797,7 @@ static void beginExplosion(const char *reason) {
       }
 
       float deltaX =
-          stageGeometry.x + stageGeometry.width * 0.5f - game.explosionX;
+        stageGeometry.x + stageGeometry.width * 0.5f - game.explosionX;
 
       float deltaY = sliceCentreY - game.explosionY;
 
@@ -2234,15 +2828,14 @@ static void beginExplosion(const char *reason) {
       float sideDirection = side == 0 ? -1.0f : 1.0f;
 
       createFragment(
-          FragmentType::SIDE_PANEL,
-          stageGeometry.x + stageGeometry.width * (side == 0 ? 0.12f : 0.88f),
-          stageGeometry.y +
-              stageGeometry.height * randomGenerator.range(0.25f, 0.75f),
-          4.0f, stageGeometry.height * randomGenerator.range(0.28f, 0.52f),
-          sideDirection * randomGenerator.range(55.0f, 105.0f),
-          randomGenerator.range(-72.0f, 35.0f), 0.0f,
-          randomGenerator.range(-7.0f, 7.0f), 2.8f, definition.bandColour, 0.0f,
-          -1);
+        FragmentType::SIDE_PANEL,
+        stageGeometry.x + stageGeometry.width * (side == 0 ? 0.12f : 0.88f),
+        stageGeometry.y + stageGeometry.height * randomGenerator.range(0.25f, 0.75f),
+        4.0f, stageGeometry.height * randomGenerator.range(0.28f, 0.52f),
+        sideDirection * randomGenerator.range(55.0f, 105.0f),
+        randomGenerator.range(-72.0f, 35.0f), 0.0f,
+        randomGenerator.range(-7.0f, 7.0f), 2.8f, definition.bandColour, 0.0f,
+        -1);
     }
 
     createFragment(FragmentType::ENGINE,
@@ -2270,11 +2863,15 @@ static void separateCurrentStage() {
     return;
   }
 
-  float progress = game.stageElapsed / stage->burnSeconds;
+  float burnSeconds = flightTiming.stageBurnSeconds(
+    currentMission(), game.activeStage);
+  float progress = game.stageElapsed / maxFloat(0.01f, burnSeconds);
+  float lateSeconds = maxFloat(0.0f, game.stageElapsed - burnSeconds);
+  float lateGrace = flightTiming.lateGraceSeconds(
+    currentMission(), game.activeStage);
 
-  if (progress >= 0.985f) {
+  if (lateSeconds > lateGrace) {
     beginExplosion("STAGE RUPTURE");
-
     return;
   }
 
@@ -2286,57 +2883,71 @@ static void separateCurrentStage() {
   }
 
   const StageGeometry &activeGeometry =
-      geometry.stages[geometry.stageCount - 1];
+    geometry.stages[geometry.stageCount - 1];
 
   float remainingFuel = clamp01(1.0f - progress);
 
-  createWholeDetachedStage(*stage, activeGeometry, remainingFuel);
+  float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
+  createWholeDetachedStage(*stage, activeGeometry, remainingFuel,
+                           pivotY, geometry.pitchRadians);
 
-  float seamX = activeGeometry.x + activeGeometry.width * 0.5f;
-
+  float seamX = activeGeometry.x + activeGeometry.width * 0.5f +
+    rocketPitchOffset(activeGeometry.y, pivotY, geometry.pitchRadians);
   float seamY = activeGeometry.y;
 
   spawnSparkBurst(seamX, seamY, 15, C_GREEN);
-
   spawnSmokeBurst(seamX, seamY + 2.0f, 7, 17.0f);
 
-  if (progress < 0.62f) {
-    setFeedback("EARLY", C_ORANGE, 1.15f);
+  char stageFeedback[20];
+  uint8_t separatedStage = game.activeStage + 1;
 
+  if (progress < 0.65f) {
+    snprintf(stageFeedback, sizeof(stageFeedback), "S%u TOO EARLY", separatedStage);
+    setFeedback(stageFeedback, C_RED, 1.05f);
+    game.velocity *= 0.52f;
+    game.score = game.score > 120 ? game.score - 120 : 0;
+    game.shake = 4.5f;
+  } else if (progress < 0.88f) {
+    snprintf(stageFeedback, sizeof(stageFeedback), "S%u EARLY", separatedStage);
+    setFeedback(stageFeedback, C_ORANGE, 1.0f);
     game.velocity *= 0.72f;
-    game.score += 75;
-    game.shake = 1.0f;
-  } else if (progress < 0.84f) {
-    setFeedback("GOOD", C_CYAN, 1.15f);
-
+    game.score += 90;
+    game.shake = 4.5f;
+  } else if (progress < 0.95f) {
+    snprintf(stageFeedback, sizeof(stageFeedback), "S%u GOOD", separatedStage);
+    setFeedback(stageFeedback, C_CYAN, 1.0f);
     game.velocity *= 0.90f;
-    game.score += 280;
-    game.shake = 1.4f;
+    game.score += 300;
+    game.shake = 5.0f;
+  } else if (lateSeconds <= 0.18f) {
+    snprintf(stageFeedback, sizeof(stageFeedback), "S%u PERFECT", separatedStage);
+    setFeedback(stageFeedback, C_GREEN, 1.08f);
+    game.velocity *= 0.995f;
+    game.score += 600;
+    game.shake = 5.5f;
   } else {
-    setFeedback("AWESOME", C_GREEN, 1.25f);
-
-    game.velocity *= 0.985f;
-    game.score += 590;
-    game.shake = 2.2f;
+    snprintf(stageFeedback, sizeof(stageFeedback), "S%u LATE", separatedStage);
+    setFeedback(stageFeedback, C_YELLOW, 1.0f);
+    game.velocity *= 0.88f;
+    game.score += 170;
+    game.shake = 5.0f;
   }
 
   game.activeStage++;
   game.stageElapsed = 0.0f;
+  game.stageBurnoutCueShown = false;
 
-  // Smoothly re-center the remaining rocket on screen
-  if (game.activeStage < currentMission().stageCount) {
-    float remainingHeight = remainingRocketHeight(currentMission(), game.activeStage);
-    float oldCompleteHeight = remainingRocketHeight(currentMission(), game.activeStage - 1);
-    game.centeringTarget += oldCompleteHeight - remainingHeight;
-  }
+  // Keep the surviving hardware continuous, then smoothly move its new visual
+  // centre back to the pre-separation tracking position.
+  float remainingHeight = remainingRocketHeight(currentMission(), game.activeStage);
+  float previousHeight = remainingRocketHeight(currentMission(), game.activeStage - 1);
+  game.centeringTarget += (previousHeight - remainingHeight) * 0.5f;
 
   if (game.activeStage >= currentMission().stageCount) {
     game.phase = FlightPhase::COASTING;
-
     game.phaseStartedAt = millis();
   } else {
     game.phase = FlightPhase::BURNING;
-
     game.phaseStartedAt = millis();
 
     RocketGeometry nextGeometry;
@@ -2344,14 +2955,16 @@ static void separateCurrentStage() {
 
     if (nextGeometry.stageCount > 0) {
       const StageGeometry &newActive =
-          nextGeometry.stages[nextGeometry.stageCount - 1];
+        nextGeometry.stages[nextGeometry.stageCount - 1];
 
       float nozzleX = newActive.x + newActive.width * 0.5f;
-
-      float nozzleY = newActive.y + newActive.height + 4.0f;
+      float nozzleY = newActive.y + newActive.height +
+        scaledSize(5.0f, nextGeometry.visualScale);
+      float nextPivotY = (nextGeometry.noseY + nextGeometry.bottomY) * 0.5f;
+      nozzleX += rocketPitchOffset(nozzleY, nextPivotY,
+                                   nextGeometry.pitchRadians);
 
       spawnFireBurst(nozzleX, nozzleY, 11, 30.0f);
-
       spawnSmokeBurst(nozzleX, nozzleY + 4.0f, 5, 17.0f);
     }
   }
@@ -2378,6 +2991,7 @@ static void resetFlightObjects() {
   clearFragments();
 
   game.stageElapsed = 0.0f;
+  game.stageBurnoutCueShown = false;
 
   game.altitude = 0.0f;
   game.maximumAltitude = 0.0f;
@@ -2404,6 +3018,8 @@ static void resetFlightObjects() {
   game.recoveryY = -36.0f;
   game.parachuteOpen = 0.0f;
   game.deploymentY = 170.0f;
+  game.transitionStartAltitude = 0.0f;
+  game.reentryHeat = 0.0f;
 
   game.explosionX = 86.0f;
   game.explosionY = 150.0f;
@@ -2419,7 +3035,10 @@ static void startMission() {
   game.launchNoseY = 270.0f - completeHeight;
 
   // The camera begins tracking after a short, fast pad-clearance movement.
-  game.trackingNoseY = game.launchNoseY - 48.0f;
+  // Track the complete stack by its visual centre, not by a fixed nose
+  // displacement. This gives two-, three- and four-stage rockets the same
+  // upper-middle composition while preserving their launch-pad position.
+  game.trackingNoseY = ROCKET_TRACKING_CENTRE_Y - completeHeight * 0.5f;
 
   if (game.trackingNoseY < 24.0f) {
     game.trackingNoseY = 24.0f;
@@ -2473,58 +3092,65 @@ static void spawnContinuousEngineEffects(const RocketGeometry &geometry) {
   }
 
   const StageGeometry &activeGeometry =
-      geometry.stages[geometry.stageCount - 1];
-
+    geometry.stages[geometry.stageCount - 1];
   float nozzleX = activeGeometry.x + activeGeometry.width * 0.5f;
+  float scale = geometry.visualScale;
+  float nozzleY = activeGeometry.y + activeGeometry.height +
+                  scaledSize(7.0f, scale);
+  float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
+  nozzleX += rocketPitchOffset(nozzleY, pivotY, geometry.pitchRadians);
+  float spaceAmount = smoothStep(35.0f, 150.0f,
+                                 displayedAltitudeAt(game.altitude));
+  float inheritedScreenVelocity =
+    -maxFloat(0.0f, game.velocity) * WORLD_PIXELS_PER_ALTITUDE;
 
-  float nozzleY = activeGeometry.y + activeGeometry.height + 7.0f;
+  if (spaceAmount < 0.72f &&
+      randomGenerator.chance(0.72f - spaceAmount * 0.75f)) {
+    spawnParticle(
+      ParticleType::FIRE,
+      nozzleX + randomGenerator.range(-1.5f, 1.5f) * scale,
+      nozzleY + randomGenerator.range(1.0f, 3.0f) * scale,
+      randomGenerator.range(-8.0f, 8.0f) * (1.0f - spaceAmount * 0.35f),
+      inheritedScreenVelocity + randomGenerator.range(19.0f, 30.0f),
+      randomGenerator.range(0.09f, 0.17f),
+      randomGenerator.range(0.8f, 1.4f) * scale,
+      randomGenerator.chance(0.55f) ? C_YELLOW : C_ORANGE);
+  }
 
-  spawnParticle(
-      ParticleType::FIRE, nozzleX + randomGenerator.range(-2.5f, 2.5f),
-      nozzleY + randomGenerator.range(3.0f, 10.0f),
-      randomGenerator.range(-6.0f, 6.0f), randomGenerator.range(31.0f, 61.0f),
-      randomGenerator.range(0.18f, 0.42f), randomGenerator.range(1.2f, 2.5f),
-      randomGenerator.chance(0.5f) ? C_YELLOW : C_ORANGE);
-
-  if (randomGenerator.chance(0.65f)) {
+  if (spaceAmount < 0.70f &&
+      randomGenerator.chance((1.0f - spaceAmount) * 0.58f)) {
     spawnParticle(ParticleType::SMOKE,
-                  nozzleX + randomGenerator.range(-5.0f, 5.0f), nozzleY + 20.0f,
-                  randomGenerator.range(-15.0f, 15.0f),
-                  randomGenerator.range(21.0f, 39.0f),
-                  randomGenerator.range(0.55f, 1.15f),
-                  randomGenerator.range(2.0f, 4.0f), C_SMOKE);
+                  nozzleX + randomGenerator.range(-3.0f, 3.0f) * scale,
+                  nozzleY + scaledSize(4.0f, scale),
+                  randomGenerator.range(-10.0f, 10.0f),
+                  inheritedScreenVelocity + randomGenerator.range(13.0f, 23.0f),
+                  randomGenerator.range(0.28f, 0.58f),
+                  randomGenerator.range(1.4f, 2.6f) * scale, C_SMOKE);
   }
 
   if (game.altitude < 12.0f) {
     float padY = 274.0f + game.cameraAltitude * WORLD_PIXELS_PER_ALTITUDE;
-
     spawnParticle(
-        ParticleType::SMOKE, 86.0f + randomGenerator.range(-28.0f, 28.0f),
-        padY + randomGenerator.range(-2.0f, 10.0f),
-        randomGenerator.range(-40.0f, 40.0f),
-        randomGenerator.range(-8.0f, 14.0f), randomGenerator.range(0.8f, 1.8f),
-        randomGenerator.range(3.0f, 6.0f),
-        randomGenerator.chance(0.5f) ? C_SMOKE : C_SMOKE_DARK);
+      ParticleType::SMOKE, 86.0f + randomGenerator.range(-28.0f, 28.0f),
+      padY + randomGenerator.range(-2.0f, 10.0f),
+      randomGenerator.range(-40.0f, 40.0f),
+      randomGenerator.range(-8.0f, 14.0f), randomGenerator.range(0.8f, 1.8f),
+      randomGenerator.range(3.0f, 6.0f),
+      randomGenerator.chance(0.5f) ? C_SMOKE : C_SMOKE_DARK);
   }
 }
 
 static void completeMission() {
   game.success = true;
-
   game.score += 1500 + (int32_t)(maxFloat(0.0f, game.velocity) * 90.0f);
-
   saveMissionProgress();
-
-  setFeedback("SPACE REACHED", C_GREEN, 1.7f);
+  setFeedback("TARGET REACHED", C_GREEN, 1.25f);
 
   if (currentMission().recoverCapsule) {
-    game.recoveryY = -38.0f;
-    game.parachuteOpen = 0.0f;
-
-    setPhase(FlightPhase::RECOVERY);
+    game.transitionStartAltitude = game.altitude;
+    setPhase(FlightPhase::APOGEE);
   } else {
     game.deploymentY = 170.0f;
-
     setPhase(FlightPhase::DEPLOYMENT);
   }
 }
@@ -2559,25 +3185,34 @@ static void updateCentering(float deltaSeconds) {
   if (game.trackingNoseY > 170.0f) {
     game.trackingNoseY = 170.0f;
   }
+
+  // Recentring is a camera/composition move. World effects must receive the
+  // same shift or the survivor moving down makes the old stage appear to jump
+  // upward at the instant of separation.
+  for (uint8_t index = 0; index < MAX_PARTICLES; index++) {
+    if (particles[index].active) {
+      particles[index].y += delta;
+    }
+  }
+
+  for (uint8_t index = 0; index < MAX_FRAGMENTS; index++) {
+    if (fragments[index].active && fragments[index].cameraTracked) {
+      fragments[index].y += delta;
+    }
+  }
 }
 
 static void updateFlight(float deltaSeconds, uint32_t now) {
   float phaseSeconds = (now - game.phaseStartedAt) / 1000.0f;
-
   bool emitEngineEffects = false;
 
   if (game.phase == FlightPhase::COUNTDOWN) {
     if (phaseSeconds >= 3.0f) {
       setPhase(FlightPhase::BURNING);
-
-      // Stronger initial kick.
       game.velocity = 1.35f;
-
       setFeedback("LIFTOFF", C_YELLOW, 1.0f);
-      game.shake = 5.0f;
-
+      game.shake = 7.0f;
       spawnSmokeBurst(86.0f, 267.0f, 34, 43.0f);
-
       spawnFireBurst(86.0f, 258.0f, 18, 34.0f);
     }
   } else if (game.phase == FlightPhase::BURNING) {
@@ -2586,29 +3221,50 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
     if (stage == nullptr) {
       setPhase(FlightPhase::COASTING);
     } else {
-      game.stageElapsed += deltaSeconds;
+      float previousElapsed = game.stageElapsed;
+      float nextElapsed = previousElapsed + deltaSeconds;
+      float burnSeconds = flightTiming.stageBurnSeconds(
+        currentMission(), game.activeStage);
+      float poweredSeconds =
+        clampFloat(burnSeconds - previousElapsed, 0.0f, deltaSeconds);
+      float unpoweredSeconds = deltaSeconds - poweredSeconds;
 
-      float gravity = gravityAtAltitude(game.altitude);
+      if (poweredSeconds > 0.0f) {
+        float gravity = gravityAtAltitude(game.altitude);
+        game.velocity += (stage->thrust - gravity) * poweredSeconds;
+        game.altitude += maxFloat(0.0f, game.velocity) * poweredSeconds;
+        emitEngineEffects = true;
+      }
 
-      game.velocity += (stage->thrust - gravity) * deltaSeconds;
+      if (unpoweredSeconds > 0.0f) {
+        float gravity = gravityAtAltitude(game.altitude);
+        game.velocity -= gravity * unpoweredSeconds;
+        game.altitude = maxFloat(0.0f,
+          game.altitude + game.velocity * unpoweredSeconds);
+      }
 
-      game.altitude += maxFloat(0.0f, game.velocity) * deltaSeconds;
+      game.stageElapsed = nextElapsed;
+      game.score += (int32_t)(maxFloat(0.0f, game.velocity) *
+                              deltaSeconds * 57.0f);
 
-      game.score += (int32_t)(maxFloat(0.0f, game.velocity) * 1.9f);
+      if (!game.stageBurnoutCueShown &&
+          previousElapsed < burnSeconds &&
+          nextElapsed >= burnSeconds) {
+        game.stageBurnoutCueShown = true;
+        setFeedback("SEPARATE NOW", C_YELLOW, 0.85f);
+        game.shake = maxFloat(game.shake, 1.2f);
+      }
 
-      emitEngineEffects = true;
-
-      if (game.stageElapsed > stage->burnSeconds * 1.045f) {
+      if (game.stageElapsed >
+          burnSeconds + flightTiming.lateGraceSeconds(
+            currentMission(), game.activeStage)) {
         beginExplosion("ENGINE RUPTURE");
-
         emitEngineEffects = false;
       }
     }
   } else if (game.phase == FlightPhase::COASTING) {
     float gravity = gravityAtAltitude(game.altitude);
-
     game.velocity -= gravity * deltaSeconds;
-
     game.altitude += game.velocity * deltaSeconds;
 
     if (game.altitude >= currentMission().targetAltitude) {
@@ -2616,22 +3272,69 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
     } else if (game.velocity <= 0.0f) {
       failByTrajectory();
     }
+  } else if (game.phase == FlightPhase::APOGEE) {
+    // Compress the apogee without freezing the scene. The remaining upward
+    // speed eases to zero while stars and the flight path continue moving.
+    float settleAmount = 1.0f - expf(-3.8f * deltaSeconds);
+    game.velocity = lerpFloat(game.velocity, 0.0f, settleAmount);
+    game.altitude += maxFloat(0.0f, game.velocity) * deltaSeconds * 0.16f;
+
+    if (phaseSeconds >= 1.15f) {
+      game.transitionStartAltitude = game.altitude;
+      game.velocity = 0.0f;
+      game.reentryHeat = 0.0f;
+      setFeedback("REENTRY", C_ORANGE, 1.1f);
+      setPhase(FlightPhase::REENTRY);
+    }
+  } else if (game.phase == FlightPhase::REENTRY) {
+    float recoveryDisplayAltitude =
+      minFloat(28.0f, missionDisplayTargetAltitude() * 0.36f);
+    float recoveryInternalAltitude =
+      currentMission().targetAltitude * recoveryDisplayAltitude /
+      missionDisplayTargetAltitude();
+    float descentDistance = maxFloat(
+      1.0f, game.transitionStartAltitude - recoveryInternalAltitude);
+    float progress = clamp01(
+      (game.transitionStartAltitude - game.altitude) / descentDistance);
+    float descentRate = lerpFloat(0.18f, 0.32f,
+                                  smoothStep(0.08f, 0.88f, progress));
+    float desiredVelocity = -currentMission().targetAltitude * descentRate;
+    float velocityFollow = 1.0f - expf(-3.2f * deltaSeconds);
+
+    game.velocity = lerpFloat(game.velocity, desiredVelocity, velocityFollow);
+    game.altitude = maxFloat(recoveryInternalAltitude,
+      game.altitude + game.velocity * deltaSeconds);
+    game.cameraAltitude = game.altitude;
+    game.previousCameraAltitude = game.cameraAltitude;
+    game.reentryHeat = sinf(smoothStep(0.04f, 0.96f, progress) * 3.1415926f);
+
+    if (game.altitude <= recoveryInternalAltitude + 0.01f) {
+      RocketGeometry capsuleGeometry;
+      buildCurrentRocketGeometry(capsuleGeometry);
+      game.recoveryY = capsuleGeometry.payloadY - 7.0f;
+      game.transitionStartAltitude = game.altitude;
+      // This deceleration begins with the now-immediate pilot-chute visual;
+      // reentry itself no longer eases down before deployment is visible.
+      game.velocity = maxFloat(game.velocity,
+                               -game.transitionStartAltitude * 0.24f);
+      game.parachuteOpen = 0.0f;
+      game.reentryHeat = 0.0f;
+      setPhase(FlightPhase::RECOVERY);
+    }
   } else if (game.phase == FlightPhase::DESCENDING) {
     game.velocity -= gravityAtAltitude(game.altitude) * deltaSeconds;
-
-    game.altitude =
-        maxFloat(0.0f, game.altitude + game.velocity * deltaSeconds);
+    game.altitude = maxFloat(0.0f,
+      game.altitude + game.velocity * deltaSeconds);
 
     if (phaseSeconds >= 2.8f) {
       saveMissionProgress();
-
       setScreen(ScreenMode::RESULT);
     }
   } else if (game.phase == FlightPhase::EXPLOSION) {
     if (phaseSeconds < 0.95f && randomGenerator.chance(0.72f)) {
       spawnFireBurst(game.explosionX + randomGenerator.range(-8.0f, 8.0f),
-                     game.explosionY + randomGenerator.range(-10.0f, 12.0f), 2,
-                     28.0f);
+                     game.explosionY + randomGenerator.range(-10.0f, 12.0f),
+                     2, 28.0f);
     }
 
     if (phaseSeconds < 1.45f && randomGenerator.chance(0.55f)) {
@@ -2646,47 +3349,54 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
 
     if (phaseSeconds >= 2.85f) {
       saveMissionProgress();
-
       setScreen(ScreenMode::RESULT);
     }
   } else if (game.phase == FlightPhase::DEPLOYMENT) {
     game.deploymentY -= 19.0f * deltaSeconds;
-
     game.altitude += maxFloat(0.35f, game.velocity * 0.18f) * deltaSeconds;
 
     if (phaseSeconds >= 3.0f) {
       setScreen(ScreenMode::RESULT);
     }
   } else if (game.phase == FlightPhase::RECOVERY) {
-    game.parachuteOpen = clamp01(game.parachuteOpen + deltaSeconds * 0.75f);
+    game.parachuteOpen = smoothStep(0.25f, 1.95f, phaseSeconds);
+    float descentSpeed = lerpFloat(34.0f, 15.0f, game.parachuteOpen);
+    game.recoveryY += descentSpeed * deltaSeconds;
 
-    game.recoveryY +=
-        lerpFloat(23.0f, 38.0f, game.parachuteOpen) * deltaSeconds;
+    // The parachute arrests the world-space descent as the ground and daytime
+    // sky continue to approach. Screen-space capsule motion remains gentle.
+    float desiredVelocity = -game.transitionStartAltitude *
+      lerpFloat(0.24f, 0.09f, game.parachuteOpen);
+    float velocityFollow = 1.0f - expf(
+      -(2.0f + game.parachuteOpen * 3.0f) * deltaSeconds);
+    game.velocity = lerpFloat(game.velocity, desiredVelocity, velocityFollow);
+    game.altitude = maxFloat(0.0f,
+      game.altitude + game.velocity * deltaSeconds);
+    game.cameraAltitude = game.altitude;
+    game.previousCameraAltitude = game.cameraAltitude;
 
-    if (phaseSeconds >= 4.3f) {
+    if (phaseSeconds >= 5.4f) {
       setScreen(ScreenMode::RESULT);
     }
   }
 
   updateCentering(deltaSeconds);
 
-  updateWorldCamera(deltaSeconds);
+  if (game.phase != FlightPhase::REENTRY &&
+      game.phase != FlightPhase::RECOVERY) {
+    updateWorldCamera(deltaSeconds);
+  }
 
   if (emitEngineEffects && game.phase == FlightPhase::BURNING) {
     RocketGeometry geometry;
-
     buildCurrentRocketGeometry(geometry);
-
     spawnContinuousEngineEffects(geometry);
   }
 
   game.maximumAltitude = maxFloat(game.maximumAltitude, game.altitude);
-
-  game.feedbackRemaining =
-      maxFloat(0.0f, game.feedbackRemaining - deltaSeconds);
-
-  game.shake = maxFloat(0.0f, game.shake - deltaSeconds * 12.0f);
-
+  game.feedbackRemaining = maxFloat(0.0f,
+                                    game.feedbackRemaining - deltaSeconds);
+  game.shake = maxFloat(0.0f, game.shake - deltaSeconds * 10.0f);
   game.flash = maxFloat(0.0f, game.flash - deltaSeconds * 1.8f);
 
   updateParticles(deltaSeconds);
@@ -2740,6 +3450,8 @@ static void updateScreenInput() {
 // =============================================================================
 
 static void drawHud() {
+  // HUD coordinates are fixed screen space and never receive camera or rocket
+  // transforms.
   char buffer[32];
 
   frame.fillRoundRect(5, 5, 68, 25, 5, C_PANEL);
@@ -2748,7 +3460,8 @@ static void drawHud() {
 
   drawTextLeft(currentMission().code, 10, 9, 1, C_MUTED);
 
-  snprintf(buffer, sizeof(buffer), "%d KM", (int)game.altitude);
+  snprintf(buffer, sizeof(buffer), "%d KM",
+           (int)roundf(displayedAltitudeAt(game.altitude)));
 
   drawTextRight(buffer, 68, 19, 1, C_TEXT);
 
@@ -2768,13 +3481,22 @@ static void drawHud() {
 
     drawTextCentered(buffer, 35, 1, C_MUTED);
   } else if (game.phase == FlightPhase::COASTING) {
-    drawTextCentered("COAST", 35, 1, C_CYAN);
+    snprintf(buffer, sizeof(buffer), "COAST %d/%d",
+             (int)roundf(displayedAltitudeAt(game.altitude)),
+             (int)roundf(missionDisplayTargetAltitude()));
+    drawTextCentered(buffer, 35, 1, C_CYAN);
+  } else if (game.phase == FlightPhase::APOGEE) {
+    drawTextCentered("APOGEE", 35, 1, C_GREEN);
+  } else if (game.phase == FlightPhase::REENTRY) {
+    drawTextCentered("REENTRY", 35, 1, C_ORANGE);
   }
 
   if (game.feedbackRemaining > 0.0f) {
-    uint8_t size = strcmp(game.feedback, "AWESOME") == 0 ? 2 : 1;
-
-    drawTextCentered(game.feedback, 48, size, game.feedbackColour);
+    drawTextCentered(game.feedback, 48, 1, game.feedbackColour);
+  } else if (game.phase == FlightPhase::COASTING) {
+    snprintf(buffer, sizeof(buffer), "V %+d KM/S",
+             (int)roundf(displayedVelocityAt(game.velocity)));
+    drawTextCentered(buffer, 48, 1, C_MUTED);
   }
 }
 
@@ -2783,7 +3505,7 @@ static void drawCountdown() {
 
   int countdown = 3 - (int)seconds;
 
-  char buffer[8];
+  char buffer[12];
 
   if (countdown > 0) {
     snprintf(buffer, sizeof(buffer), "%d", countdown);
@@ -2822,78 +3544,149 @@ static void drawShockwave() {
 // Flight, recovery and deployment rendering
 // =============================================================================
 
+static void drawRecoveryClouds(float elapsed, uint32_t now) {
+  static const int16_t CLOUD_X[] = { 18, 69, 132, 37, 108, 158 };
+  static const int16_t CLOUD_Y[] = { 72, 142, 215, 286, 355, 420 };
+
+  for (uint8_t index = 0; index < 6; index++) {
+    float speed = 17.0f + (index % 3) * 7.0f;
+    float movingY = CLOUD_Y[index] - elapsed * speed;
+    while (movingY < -28.0f) {
+      movingY += 430.0f;
+    }
+    int16_t drift = (int16_t)(sinf(now * 0.00025f + index) * 3.0f);
+    drawCloudShape(CLOUD_X[index] + drift, (int16_t)movingY,
+                   9 + (index % 3) * 3,
+                   index % 2 ? C_CLOUD : C565(191, 205, 211));
+  }
+}
+
 static void drawRecoveryScreen(uint32_t now) {
-  drawBackground(85.0f, now, currentMission().flightType);
+  float elapsed = (now - game.phaseStartedAt) / 1000.0f;
+  float visualAltitude = displayedAltitudeAt(game.altitude);
+  drawBackground(visualAltitude, visualAltitude, now,
+                 currentMission().flightType, false);
+  drawRecoveryClouds(elapsed, now);
 
-  float y = game.recoveryY;
+  int16_t centreX = SCREEN_W / 2;
+  float capsuleY = game.recoveryY;
+  float lineOpen = smoothStep(0.0f, 0.55f, elapsed);
+  float canopyOpen = game.parachuteOpen;
 
-  float open = game.parachuteOpen;
+  if (lineOpen > 0.02f) {
+    int16_t lineTopY = (int16_t)roundf(capsuleY -
+      lerpFloat(7.0f, 30.0f, lineOpen));
+    int16_t lineHalfWidth = (int16_t)roundf(16.0f * canopyOpen + 3.0f);
+    uint16_t lineColour = blend565(C_MUTED, C_WHITE,
+                                    (uint8_t)(lineOpen * 190.0f));
+    frame.drawLine(centreX - lineHalfWidth, lineTopY,
+                   centreX - 6, (int16_t)capsuleY + 8, lineColour);
+    frame.drawLine(centreX + lineHalfWidth, lineTopY,
+                   centreX + 6, (int16_t)capsuleY + 8, lineColour);
+    frame.drawLine(centreX, lineTopY,
+                   centreX, (int16_t)capsuleY + 8, lineColour);
 
-  int16_t canopyWidth = (int16_t)(40.0f * open);
+    if (canopyOpen < 0.12f) {
+      frame.fillCircle(centreX, lineTopY - 2,
+                       maxInt16(1, (int16_t)(lineOpen * 3.0f)), C_RED);
+    }
+  }
 
-  if (canopyWidth > 5) {
-    int16_t centreX = SCREEN_W / 2;
-
-    int16_t canopyY = (int16_t)y - 12;
-
-    frame.fillCircle(centreX, canopyY, canopyWidth / 2, C_RED);
-
-    frame.fillRect(centreX - canopyWidth / 2, canopyY, canopyWidth,
-                   canopyWidth / 2 + 2, skyTopColour(85.0f));
-
-    frame.drawLine(centreX - canopyWidth / 2, canopyY, centreX - 7,
-                   (int16_t)y + 8, C_WHITE);
-
-    frame.drawLine(centreX + canopyWidth / 2, canopyY, centreX + 7,
-                   (int16_t)y + 8, C_WHITE);
-
-    frame.drawLine(centreX, canopyY, centreX, (int16_t)y + 8, C_WHITE);
+  int16_t canopyWidth = (int16_t)roundf(42.0f * canopyOpen);
+  int16_t canopyHeight = maxInt16(2, (int16_t)roundf(14.0f * canopyOpen));
+  if (canopyWidth > 4) {
+    int16_t canopyY = (int16_t)roundf(capsuleY - 30.0f);
+    int16_t halfWidth = canopyWidth / 2;
+    for (int16_t row = 0; row <= canopyHeight; row++) {
+      float normalY = (float)(row - canopyHeight) / canopyHeight;
+      int16_t rowHalfWidth = (int16_t)roundf(
+        halfWidth * sqrtf(maxFloat(0.0f, 1.0f - normalY * normalY)));
+      frame.drawFastHLine(centreX - rowHalfWidth,
+                          canopyY - canopyHeight + row,
+                          rowHalfWidth * 2 + 1, C_RED);
+    }
+    frame.drawFastHLine(centreX - canopyWidth / 2, canopyY,
+                        canopyWidth, C565(255, 126, 94));
+    frame.drawLine(centreX, canopyY - canopyHeight,
+                   centreX, canopyY + 1, C565(255, 170, 135));
   }
 
   RocketGeometry capsuleGeometry = {};
-
-  capsuleGeometry.payloadX = SCREEN_W / 2 - 10;
-
-  capsuleGeometry.payloadY = y + 7;
-
-  capsuleGeometry.payloadWidth = 20;
-  capsuleGeometry.payloadHeight = 22;
-
+  capsuleGeometry.payloadX = centreX - 9;
+  capsuleGeometry.payloadY = capsuleY + 7;
+  capsuleGeometry.payloadWidth = 18;
+  capsuleGeometry.payloadHeight = 20;
   drawPayload(capsuleGeometry, true);
 
-  drawTextCentered("CAPSULE RECOVERY", 32, 1, C_GREEN);
+  frame.fillRoundRect(48, 294, 76, 19, 4, C_PANEL);
+  frame.drawRoundRect(48, 294, 76, 19, 4, C_BORDER);
+  drawTextCentered("RECOVERY", 300, 1, C_GREEN);
 }
 
 static void drawDeploymentScreen(uint32_t now) {
-  drawBackground(maxFloat(game.cameraAltitude, 680.0f), now, currentMission().flightType);
+  float visualAltitude = maxFloat(displayedAltitudeAt(game.cameraAltitude),
+                                  missionDisplayTargetAltitude() * 0.82f);
+  drawBackground(visualAltitude,
+                 maxFloat(displayedAltitudeAt(game.altitude), visualAltitude),
+                 now, currentMission().flightType, true);
 
   int16_t payloadY = (int16_t)game.deploymentY;
-
   frame.fillRoundRect(78, payloadY, 16, 14, 3, C_PANEL_2);
-
   frame.drawRoundRect(78, payloadY, 16, 14, 3, C_METAL);
 
   float elapsed = (now - game.phaseStartedAt) / 1000.0f;
-
   float deployment = smoothStep(0.4f, 1.35f, elapsed);
-
   int16_t panelWidth = (int16_t)(22.0f * deployment);
-
   frame.fillRect(78 - panelWidth, payloadY + 3, panelWidth, 8, C_BLUE);
-
   frame.fillRect(94, payloadY + 3, panelWidth, 8, C_BLUE);
 
   for (int16_t panelLine = 4; panelLine < panelWidth; panelLine += 5) {
     frame.drawFastVLine(78 - panelLine, payloadY + 3, 8, C_CYAN);
-
     frame.drawFastVLine(93 + panelLine, payloadY + 3, 8, C_CYAN);
   }
 
   frame.drawFastVLine(85, payloadY - 8, 28, C_WHITE);
-
   drawTextCentered("PAYLOAD CONTINUES", 38, 1, C_GREEN);
-
   drawTextCentered("OUTER SPACE", 53, 1, C_CYAN);
+}
+
+static void drawReentryEffects(const RocketGeometry &geometry, uint32_t now) {
+  if (game.phase != FlightPhase::REENTRY || game.reentryHeat <= 0.02f) {
+    return;
+  }
+
+  int16_t centreX = (int16_t)roundf(
+    geometry.payloadX + geometry.payloadWidth * 0.5f);
+  int16_t payloadTop = (int16_t)roundf(geometry.payloadY);
+  int16_t bottomY = (int16_t)roundf(
+    geometry.payloadY + geometry.payloadHeight);
+  float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
+  centreX += rocketPitchOffset(
+    geometry.payloadY + geometry.payloadHeight * 0.5f,
+    pivotY, geometry.pitchRadians);
+  int16_t width = maxInt16(4, (int16_t)roundf(
+    geometry.payloadWidth * (0.55f + game.reentryHeat * 0.38f)));
+  int16_t length = maxInt16(8, (int16_t)roundf(
+    10.0f + game.reentryHeat * 20.0f));
+  int16_t flicker = (int16_t)(sinf(now * 0.045f) * 3.0f);
+  int16_t wakeTop = payloadTop - length;
+
+  // The capsule is descending. The heat shield leads at the bottom while
+  // several narrow plasma streamers trail upward around it.
+  for (int8_t stream = -2; stream <= 2; stream++) {
+    int16_t startX = centreX + stream * maxInt16(1, width / 3);
+    int16_t endX = centreX + stream * maxInt16(2, width / 2) + flicker;
+    int16_t endY = wakeTop + abs(stream) * 3;
+    frame.drawLine(startX, bottomY - 2, endX, endY,
+                   stream == 0 ? C_YELLOW : C_RED);
+
+    if (stream >= -1 && stream <= 1) {
+      frame.drawLine(startX + 1, bottomY - 3,
+                     endX + 1, endY + length / 4, C_ORANGE);
+    }
+  }
+  frame.drawFastHLine(centreX - width, bottomY - 1,
+                      width * 2 + 1, C_YELLOW);
 }
 
 static void drawFlightScreen(uint32_t now) {
@@ -2907,23 +3700,28 @@ static void drawFlightScreen(uint32_t now) {
     return;
   }
 
-  drawBackground(game.cameraAltitude, now, currentMission().flightType);
+  float cameraDisplayAltitude = displayedAltitudeAt(game.cameraAltitude);
+  float earthDisplayAltitude = displayedAltitudeAt(game.altitude);
+  drawBackground(cameraDisplayAltitude, earthDisplayAltitude, now,
+                 currentMission().flightType, false);
 
-  drawLaunchPad(game.cameraAltitude, now, game.phase == FlightPhase::COUNTDOWN);
+  if (game.phase != FlightPhase::REENTRY &&
+      game.phase != FlightPhase::APOGEE) {
+    drawLaunchPad(game.cameraAltitude, now,
+                  game.phase == FlightPhase::COUNTDOWN);
+  }
 
   drawParticles();
   drawFragments();
 
   if (game.phase != FlightPhase::EXPLOSION) {
     RocketGeometry geometry;
-
     buildCurrentRocketGeometry(geometry);
-
+    drawReentryEffects(geometry, now);
     drawRocket(currentMission(), geometry, game.activeStage,
                currentFuelFraction(), game.phase == FlightPhase::BURNING, now);
   } else {
     drawShockwave();
-    drawParticles();
   }
 
   drawHud();
@@ -2932,25 +3730,22 @@ static void drawFlightScreen(uint32_t now) {
     drawCountdown();
   }
 
+  if (game.phase == FlightPhase::APOGEE) {
+    drawTextCentered("TURNING FOR HOME", 66, 1, C_GREEN);
+  }
+
+  if (game.phase == FlightPhase::REENTRY) {
+    drawTextCentered("ATMOSPHERIC ENTRY", 66, 1, C_ORANGE);
+  }
+
   if (game.phase == FlightPhase::DESCENDING) {
     drawTextCentered("TRAJECTORY LOST", 66, 1, C_ORANGE);
-
     drawTextCentered("ROCKET FALLING", 81, 1, C_RED);
   }
 
   if (game.phase == FlightPhase::EXPLOSION) {
     drawTextCentered("MISSION FAILURE", 52, 1, C_RED);
-
     drawTextCentered(game.failureReason, 67, 1, C_TEXT);
-  }
-
-  if (game.flash > 0.0f) {
-    uint16_t flashColour =
-        blend565(C_BLACK, C_WHITE, (uint8_t)(game.flash * 155.0f));
-
-    frame.drawRect(0, 0, SCREEN_W, SCREEN_H, flashColour);
-
-    frame.drawRect(1, 1, SCREEN_W - 2, SCREEN_H - 2, flashColour);
   }
 }
 
@@ -2958,31 +3753,11 @@ static void drawFlightScreen(uint32_t now) {
 // Splash
 // =============================================================================
 
-static void drawSplashSmoke(uint32_t elapsed) {
-  if (elapsed < 950) {
-    return;
-  }
-
-  for (uint8_t index = 0; index < 15; index++) {
-    float age = (elapsed - 950 + index * 83) % 1250;
-
-    float amount = age / 1250.0f;
-
-    int16_t x = 86 + (int16_t)(sinf(index * 2.7f + elapsed * 0.004f) *
-                               (4.0f + amount * 25.0f));
-
-    int16_t y = 272 + (int16_t)(amount * 34.0f);
-
-    int16_t radius = 2 + (int16_t)(amount * 6.0f);
-
-    frame.fillCircle(x, y, radius, index & 1 ? C_SMOKE : C_SMOKE_DARK);
-  }
-}
-
 static void drawSplashScreen(uint32_t now) {
   uint32_t elapsed = now - game.screenStartedAt;
 
-  drawBackground(0.0f, now, MISSIONS[game.selectedMission].flightType);
+  drawBackground(0.0f, 0.0f, now,
+                 MISSIONS[game.selectedMission].flightType, false);
 
   drawLaunchPad(0.0f, now, elapsed > 650);
 
@@ -2992,21 +3767,13 @@ static void drawSplashScreen(uint32_t now) {
 
   float baseNoseY = 270.0f - completeHeight;
 
-  float lift = 0.0f;
-
-  if (elapsed > 1800) {
-    lift = minFloat(38.0f, (elapsed - 1800) * 0.040f);
-  }
-
   RocketGeometry geometry;
 
-  buildRocketGeometryFor(mission, 0, baseNoseY - lift, geometry);
+  buildRocketGeometryFor(mission, 0, baseNoseY, geometry);
 
-  drawSplashSmoke(elapsed);
+  drawRocket(mission, geometry, 0, 1.0f, false, now);
 
-  drawRocket(mission, geometry, 0, 0.92f, elapsed > 920, now);
-
-  frame.fillRoundRect(11, 28, 150, 85, 10, C_PANEL);
+  fillTranslucentRoundRect(11, 28, 150, 85, 10, C_PANEL, 178);
 
   frame.drawRoundRect(11, 28, 150, 85, 10, C_BORDER);
 
@@ -3028,7 +3795,7 @@ static void drawSplashScreen(uint32_t now) {
 // =============================================================================
 
 static void drawBriefingScreen(uint32_t now) {
-  drawBackground(0.0f, now, currentMission().flightType);
+  drawBackground(0.0f, 0.0f, now, currentMission().flightType, false);
 
   drawLaunchPad(0.0f, now, false);
 
@@ -3042,7 +3809,7 @@ static void drawBriefingScreen(uint32_t now) {
 
   drawRocket(mission, previewGeometry, 0, 1.0f, false, now);
 
-  frame.fillRoundRect(8, 8, 156, 170, 9, C_PANEL);
+  fillTranslucentRoundRect(8, 8, 156, 170, 9, C_PANEL, 188);
 
   frame.drawRoundRect(8, 8, 156, 170, 9, C_BORDER);
 
@@ -3059,8 +3826,8 @@ static void drawBriefingScreen(uint32_t now) {
 
   char targetText[28];
 
-  snprintf(targetText, sizeof(targetText), "TARGET %u KM",
-           mission.targetAltitude);
+  snprintf(targetText, sizeof(targetText), "TARGET %d KM",
+           (int)roundf(missionDisplayTargetAltitude()));
 
   drawTextCentered(targetText, 55, 1, C_YELLOW);
 
@@ -3081,7 +3848,7 @@ static void drawBriefingScreen(uint32_t now) {
 
   drawTextLeft("TAP NEAR EMPTY", 18, 160, 1, C_YELLOW);
 
-  frame.fillRoundRect(18, 278, 136, 34, 8, C_PANEL);
+  fillTranslucentRoundRect(18, 278, 136, 34, 8, C_PANEL, 205);
 
   frame.drawRoundRect(18, 278, 136, 34, 8, C_BORDER);
 
@@ -3098,7 +3865,12 @@ static void drawBriefingScreen(uint32_t now) {
 // =============================================================================
 
 static void drawResultScreen(uint32_t now) {
-  drawBackground(game.maximumAltitude, now, currentMission().flightType);
+  float resultAltitude = game.success && currentMission().recoverCapsule
+    ? displayedAltitudeAt(game.altitude)
+    : displayedAltitudeAt(game.maximumAltitude);
+  drawBackground(resultAltitude, resultAltitude, now,
+                 currentMission().flightType,
+                 game.success && !currentMission().recoverCapsule);
 
   frame.fillRoundRect(10, 28, 152, 225, 10, C_PANEL);
 
@@ -3107,8 +3879,8 @@ static void drawResultScreen(uint32_t now) {
   bool finalMission = game.selectedMission + 1 >= MISSION_COUNT;
 
   drawTextCentered(game.success
-                       ? (finalMission ? "CAMPAIGN COMPLETE" : "LEVEL CLEARED")
-                       : "MISSION FAILED",
+                     ? (finalMission ? "CAMPAIGN COMPLETE" : "LEVEL CLEARED")
+                     : "MISSION FAILED",
                    43, 1, game.success ? C_GREEN : C_RED);
 
   drawTextCentered(currentMission().name, 60, 1, C_TEXT);
@@ -3123,7 +3895,8 @@ static void drawResultScreen(uint32_t now) {
 
   drawTextLeft("APOGEE", 23, 115, 1, C_MUTED);
 
-  snprintf(buffer, sizeof(buffer), "%d KM", (int)game.maximumAltitude);
+  snprintf(buffer, sizeof(buffer), "%d KM",
+           (int)roundf(displayedAltitudeAt(game.maximumAltitude)));
 
   drawTextRight(buffer, 148, 115, 1, C_TEXT);
 
@@ -3162,30 +3935,72 @@ static void drawResultScreen(uint32_t now) {
 // Rendering
 // =============================================================================
 
+static void applyFrameShake(uint32_t now) {
+  int16_t amplitude = (int16_t)ceilf(minFloat(7.0f, game.shake));
+  if (amplitude <= 0) {
+    return;
+  }
+
+  int16_t span = amplitude * 2 + 1;
+  uint32_t phase = now / FRAME_INTERVAL_MS;
+  int16_t offsetX = (int16_t)((phase * 17U + 3U) % span) - amplitude;
+  int16_t offsetY = (int16_t)((phase * 29U + 7U) % span) - amplitude;
+  uint16_t *buffer = frame.getBuffer();
+
+  if (offsetY > 0) {
+    memmove(buffer + offsetY * SCREEN_W, buffer,
+            (size_t)(SCREEN_H - offsetY) * SCREEN_W * sizeof(uint16_t));
+    frame.fillRect(0, 0, SCREEN_W, offsetY, C_BLACK);
+  } else if (offsetY < 0) {
+    int16_t rows = -offsetY;
+    memmove(buffer, buffer + rows * SCREEN_W,
+            (size_t)(SCREEN_H - rows) * SCREEN_W * sizeof(uint16_t));
+    frame.fillRect(0, SCREEN_H - rows, SCREEN_W, rows, C_BLACK);
+  }
+
+  if (offsetX != 0) {
+    for (int16_t y = 0; y < SCREEN_H; y++) {
+      uint16_t *row = buffer + y * SCREEN_W;
+      if (offsetX > 0) {
+        memmove(row + offsetX, row,
+                (SCREEN_W - offsetX) * sizeof(uint16_t));
+        for (int16_t x = 0; x < offsetX; x++) {
+          row[x] = C_BLACK;
+        }
+      } else {
+        int16_t columns = -offsetX;
+        memmove(row, row + columns,
+                (SCREEN_W - columns) * sizeof(uint16_t));
+        for (int16_t x = SCREEN_W - columns; x < SCREEN_W; x++) {
+          row[x] = C_BLACK;
+        }
+      }
+    }
+  }
+}
+
 static void renderFrame(uint32_t now) {
   frame.fillScreen(C_BLACK);
 
   switch (game.screen) {
-  case ScreenMode::SPLASH:
-    drawSplashScreen(now);
-    break;
+    case ScreenMode::SPLASH:
+      drawSplashScreen(now);
+      break;
 
-  case ScreenMode::BRIEFING:
-    drawBriefingScreen(now);
-    break;
+    case ScreenMode::BRIEFING:
+      drawBriefingScreen(now);
+      break;
 
-  case ScreenMode::FLIGHT:
-    drawFlightScreen(now);
-    break;
+    case ScreenMode::FLIGHT:
+      drawFlightScreen(now);
+      break;
 
-  case ScreenMode::RESULT:
-    drawResultScreen(now);
-    break;
+    case ScreenMode::RESULT:
+      drawResultScreen(now);
+      break;
   }
 
-  if (game.shake > 0.0f) {
-    frame.drawRect(0, 0, SCREEN_W, SCREEN_H, blend565(C_BORDER, C_RED, 80));
-  }
+  applyFrameShake(now);
 
   gfx->draw16bitRGBBitmap(0, 0, frame.getBuffer(), SCREEN_W, SCREEN_H);
 }
@@ -3194,85 +4009,196 @@ static void renderFrame(uint32_t now) {
 // RGB LED
 // =============================================================================
 
-static void setLedColour(uint8_t red, uint8_t green, uint8_t blue) {
-  rgbLed.setPixelColor(0, rgbLed.Color(red, green, blue));
+class StatusLedController {
+public:
+  explicit StatusLedController(Adafruit_NeoPixel &pixel) : pixel(pixel) {}
 
-  rgbLed.show();
-}
-
-static void updateLed(uint32_t now) {
-  if (game.screen == ScreenMode::SPLASH) {
-    uint8_t pulse = 8 + (uint8_t)((sinf(now * 0.004f) * 0.5f + 0.5f) * 28.0f);
-
-    setLedColour(0, pulse, pulse);
-
-    return;
+  void begin() {
+    pixel.begin();
+    pixel.setBrightness(45);
+    pixel.clear();
+    pixel.show();
+    lastColour = 0xFFFFFFFFU;
   }
 
-  if (game.screen != ScreenMode::FLIGHT) {
-    setLedColour(0, 18, 26);
-
-    return;
+  void showHardwareFault(bool lit) {
+    set(lit ? 240 : 0, 0, 0);
   }
 
-  if (game.phase == FlightPhase::COUNTDOWN) {
-    bool lit = ((now / 220) & 1U) == 0;
-
-    setLedColour(lit ? 45 : 5, lit ? 20 : 2, 0);
-
-    return;
-  }
-
-  if (game.phase == FlightPhase::BURNING) {
-    float fuel = currentFuelFraction();
-
-    if (fuel < 0.08f) {
-      setLedColour(55, 0, 0);
-    } else if (fuel < 0.20f) {
-      setLedColour(42, 23, 0);
-    } else {
-      setLedColour(0, 24, 32);
+  void update(uint32_t now) {
+    if (game.screen == ScreenMode::SPLASH) {
+      uint8_t pulse = breathe(now, 1550, 28, 150);
+      set(0, pulse / 2, pulse);
+      return;
     }
 
-    return;
+    if (game.screen == ScreenMode::BRIEFING) {
+      uint8_t pulse = breathe(now, 1800, 24, 120);
+      set(pulse / 4, pulse / 2, pulse);
+      return;
+    }
+
+    if (game.screen == ScreenMode::RESULT) {
+      if (game.success) {
+        uint8_t pulse = breathe(now, 1150, 35, 190);
+        set(0, pulse, pulse / 4);
+      } else {
+        bool lit = doubleBlink(now, 980);
+        set(lit ? 230 : 18, 0, 0);
+      }
+      return;
+    }
+
+    // Failure state has absolute priority over an older separation prompt or
+    // result flash that may still have feedback time remaining.
+    if (game.phase == FlightPhase::EXPLOSION) {
+      bool lit = ((now / 65U) & 1U) == 0;
+      set(lit ? 255 : 24, 0, 0);
+      return;
+    }
+
+    if (game.feedbackRemaining > 0.0f && game.feedback[0] == 'S') {
+      bool lit = ((now / 95U) & 1U) == 0;
+      if (strstr(game.feedback, "PERFECT") != nullptr) {
+        set(0, lit ? 235 : 38, lit ? 80 : 12);
+      } else if (strstr(game.feedback, "GOOD") != nullptr) {
+        set(0, lit ? 145 : 25, lit ? 225 : 42);
+      } else if (strstr(game.feedback, "LATE") != nullptr) {
+        set(lit ? 220 : 35, lit ? 150 : 22, 0);
+      } else {
+        set(lit ? 235 : 28, lit ? 45 : 3, 0);
+      }
+      return;
+    }
+
+    switch (game.phase) {
+      case FlightPhase::COUNTDOWN: {
+        uint32_t elapsed = now - game.phaseStartedAt;
+        bool lit = ((elapsed / (elapsed > 2200 ? 90U : 220U)) & 1U) == 0;
+        set(lit ? 220 : 12, lit ? 82 : 3, 0);
+        break;
+      }
+
+      case FlightPhase::BURNING: {
+        float fuel = currentFuelFraction();
+        if (fuel < 0.08f) {
+          bool lit = ((now / 75U) & 1U) == 0;
+          set(lit ? 240 : 20, 0, 0);
+        } else if (fuel < 0.20f) {
+          bool lit = ((now / 155U) & 1U) == 0;
+          set(lit ? 210 : 42, lit ? 92 : 12, 0);
+        } else {
+          uint8_t pulse = breathe(now, 720, 75, 155);
+          set(0, pulse, pulse + 55);
+        }
+        break;
+      }
+
+      case FlightPhase::COASTING: {
+        uint8_t pulse = breathe(now, 1350, 22, 145);
+        set(0, pulse / 2, pulse);
+        break;
+      }
+
+      case FlightPhase::APOGEE: {
+        uint8_t pulse = breathe(now, 900, 45, 205);
+        set(pulse / 2, pulse, pulse / 2);
+        break;
+      }
+
+      case FlightPhase::REENTRY: {
+        uint8_t flicker = 120 + (uint8_t)((now / 47U * 37U) % 110U);
+        set(flicker, flicker / 5, 0);
+        break;
+      }
+
+      case FlightPhase::RECOVERY: {
+        uint8_t pulse = breathe(now, 1200, 42, 175);
+        set(0, pulse, pulse / 2);
+        break;
+      }
+
+      case FlightPhase::DEPLOYMENT: {
+        uint8_t pulse = breathe(now, 780, 45, 185);
+        set(pulse / 2, 0, pulse);
+        break;
+      }
+
+      case FlightPhase::EXPLOSION: {
+        set(255, 0, 0);
+        break;
+      }
+
+      case FlightPhase::DESCENDING: {
+        bool lit = doubleBlink(now, 820);
+        set(lit ? 230 : 15, lit ? 12 : 0, 0);
+        break;
+      }
+    }
   }
 
-  if (game.phase == FlightPhase::EXPLOSION) {
-    bool lit = ((now / 85) & 1U) == 0;
+private:
+  Adafruit_NeoPixel &pixel;
+  uint32_t lastColour = 0xFFFFFFFFU;
 
-    setLedColour(lit ? 62 : 6, 0, 0);
-
-    return;
+  static uint8_t breathe(uint32_t now, uint16_t period,
+                         uint8_t minimum, uint8_t maximum) {
+    float phase = (now % period) / (float)period * 6.2831853f;
+    float amount = sinf(phase) * 0.5f + 0.5f;
+    return minimum + (uint8_t)((maximum - minimum) * amount);
   }
 
-  if (game.success) {
-    setLedColour(0, 45, 14);
-  } else {
-    setLedColour(30, 8, 0);
+  static bool doubleBlink(uint32_t now, uint16_t period) {
+    uint16_t phase = now % period;
+    return phase < 95 || (phase >= 175 && phase < 285);
   }
-}
+
+  void set(uint8_t red, uint8_t green, uint8_t blue) {
+    uint32_t colour = pixel.Color(red, green, blue);
+    if (colour == lastColour) {
+      return;
+    }
+
+    lastColour = colour;
+    pixel.setPixelColor(0, colour);
+    pixel.show();
+  }
+};
+
+static StatusLedController statusLed(rgbLed);
 
 // =============================================================================
 // Backlight
 // =============================================================================
 
+static uint8_t displayBrightnessDuty(uint8_t percentage) {
+  uint16_t clamped = percentage > 100 ? 100 : percentage;
+
+  if (clamped == 0) {
+    return 0;
+  }
+
+  // Perceptual quadratic mapping. The public value is a true 0-100 percent;
+  // PWM is calculated only here so 50% does not look almost fully bright.
+  uint32_t squared = (uint32_t)clamped * (uint32_t)clamped;
+  uint8_t duty = (uint8_t)((squared * 255U + 5000U) / 10000U);
+  return maxInt16((int16_t)2, (int16_t)duty);
+}
+
 static void initializeBacklight() {
+  if (displayBrightness > 100) {
+    displayBrightness = 100;
+  }
+
+  uint8_t duty = displayBrightnessDuty(displayBrightness);
+
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-
   ledcAttach(PIN_LCD_BL, 5000, 8);
-
-  ledcWrite(PIN_LCD_BL, 175);
-
+  ledcWrite(PIN_LCD_BL, duty);
 #else
-
-  static constexpr uint8_t BACKLIGHT_CHANNEL = 0;
-
   ledcSetup(BACKLIGHT_CHANNEL, 5000, 8);
-
   ledcAttachPin(PIN_LCD_BL, BACKLIGHT_CHANNEL);
-
-  ledcWrite(BACKLIGHT_CHANNEL, 175);
-
+  ledcWrite(BACKLIGHT_CHANNEL, duty);
 #endif
 }
 
@@ -3287,10 +4213,7 @@ void voidAscentSetup() {
 
   button.begin();
 
-  rgbLed.begin();
-  rgbLed.setBrightness(45);
-  rgbLed.clear();
-  rgbLed.show();
+  statusLed.begin();
 
   initializeBacklight();
 
@@ -3298,11 +4221,11 @@ void voidAscentSetup() {
     Serial.println("LCD initialization failed.");
 
     while (true) {
-      setLedColour(55, 0, 0);
+      statusLed.showHardwareFault(true);
 
       delay(160);
 
-      setLedColour(0, 0, 0);
+      statusLed.showHardwareFault(false);
 
       delay(160);
     }
@@ -3328,12 +4251,16 @@ void voidAscentLoop() {
   button.update(now);
   updateScreenInput();
 
+  // Consume edge events immediately. Otherwise one press can be processed
+  // repeatedly during the several loop iterations between rendered frames.
+  button.clearEvents();
+
   if (game.screen == ScreenMode::SPLASH && now - game.screenStartedAt > 3900) {
     setScreen(ScreenMode::BRIEFING);
   }
 
   if (now - lastFrameAt < FRAME_INTERVAL_MS) {
-    updateLed(now);
+    statusLed.update(now);
     delay(1);
     return;
   }
@@ -3351,7 +4278,5 @@ void voidAscentLoop() {
   }
 
   renderFrame(now);
-  updateLed(now);
-
-  button.clearEvents();
+  statusLed.update(now);
 }
