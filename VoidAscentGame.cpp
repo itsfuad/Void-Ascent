@@ -55,6 +55,16 @@ Arduino_GFX *gfx = new Arduino_ST7789(lcdBus, PIN_LCD_RST, LCD_ROTATION, true,
 
 static GFXcanvas16 frame(SCREEN_W, SCREEN_H);
 
+// The assembled rocket is drawn upright into one local layer, then that
+// completed image is rotated once. This prevents independently rasterised
+// stage details from opening seams at shallow pitch angles.
+static constexpr int16_t ROCKET_LAYER_W = 80;
+static constexpr int16_t ROCKET_LAYER_H = 288;
+static constexpr int16_t ROCKET_LAYER_PIVOT_X = ROCKET_LAYER_W / 2;
+static constexpr int16_t ROCKET_LAYER_PIVOT_Y = 128;
+static GFXcanvas16 rocketLayer(ROCKET_LAYER_W, ROCKET_LAYER_H);
+static Adafruit_GFX *rocketRenderTarget = &frame;
+
 static Adafruit_NeoPixel rgbLed(1, PIN_RGB_LED, NEO_GRB + NEO_KHZ800);
 
 static Preferences preferences;
@@ -1374,11 +1384,11 @@ static void drawFragment(const Fragment &fragment) {
 
   if (fragment.type == FragmentType::WHOLE_STAGE) {
     PointF engineCentre = rotatePoint(
-      0.0f, fragment.height * 0.5f + 2.0f * fragment.cameraScale,
+      0.0f, fragment.height * 0.5f + fragment.width * 0.13f,
       fragment.x, fragment.y, fragment.rotation);
     fillRotatedRectangle(engineCentre.x, engineCentre.y,
-                         maxFloat(2.0f, fragment.width * 0.34f),
-                         maxFloat(1.0f, fragment.width * 0.18f),
+                         maxFloat(3.0f, fragment.width * 0.46f),
+                         maxFloat(2.0f, fragment.width * 0.26f),
                          fragment.rotation, C_METAL_DARK);
   }
 }
@@ -2370,16 +2380,17 @@ static void drawRocketLine(float x1, float y1, float x2, float y2,
                            uint16_t colour) {
   PointF first = transform.apply(x1, y1);
   PointF second = transform.apply(x2, y2);
-  frame.drawLine((int16_t)roundf(first.x), (int16_t)roundf(first.y),
-                 (int16_t)roundf(second.x), (int16_t)roundf(second.y),
-                 colour);
+  rocketRenderTarget->drawLine(
+    (int16_t)roundf(first.x), (int16_t)roundf(first.y),
+    (int16_t)roundf(second.x), (int16_t)roundf(second.y), colour);
 }
 
 static void drawRocketPixel(float x, float y,
                             const RocketTransform &transform,
                             uint16_t colour) {
   PointF point = transform.apply(x, y);
-  frame.drawPixel((int16_t)roundf(point.x), (int16_t)roundf(point.y), colour);
+  rocketRenderTarget->drawPixel(
+    (int16_t)roundf(point.x), (int16_t)roundf(point.y), colour);
 }
 
 static void drawPitchedHLine(int16_t x, int16_t y, int16_t width,
@@ -2387,6 +2398,25 @@ static void drawPitchedHLine(int16_t x, int16_t y, int16_t width,
                              uint16_t colour) {
   drawRocketLine(x, y, x + maxInt16(1, width) - 1, y,
                  transform, colour);
+}
+
+static void fillPitchedQuad(float x1, float y1, float x2, float y2,
+                            float x3, float y3, float x4, float y4,
+                            const RocketTransform &transform,
+                            uint16_t colour) {
+  PointF first = transform.apply(x1, y1);
+  PointF second = transform.apply(x2, y2);
+  PointF third = transform.apply(x3, y3);
+  PointF fourth = transform.apply(x4, y4);
+
+  rocketRenderTarget->fillTriangle(
+    (int16_t)roundf(first.x), (int16_t)roundf(first.y),
+    (int16_t)roundf(second.x), (int16_t)roundf(second.y),
+    (int16_t)roundf(third.x), (int16_t)roundf(third.y), colour);
+  rocketRenderTarget->fillTriangle(
+    (int16_t)roundf(first.x), (int16_t)roundf(first.y),
+    (int16_t)roundf(third.x), (int16_t)roundf(third.y),
+    (int16_t)roundf(fourth.x), (int16_t)roundf(fourth.y), colour);
 }
 
 static void fillPitchedRect(int16_t x, int16_t y, int16_t width,
@@ -2400,26 +2430,8 @@ static void fillPitchedRect(int16_t x, int16_t y, int16_t width,
     return;
   }
 
-  PointF topLeft = transform.apply(x, y);
-  PointF topRight = transform.apply(right, y);
-  PointF bottomRight = transform.apply(right, bottom);
-  PointF bottomLeft = transform.apply(x, bottom);
-
-  // Transform each solid part once, then rasterise the resulting quad. Drawing
-  // independently rounded scanlines made a rigid stack look fragmented while
-  // it pitched, especially at the stage bands and interstage boundaries.
-  frame.fillTriangle((int16_t)roundf(topLeft.x),
-                     (int16_t)roundf(topLeft.y),
-                     (int16_t)roundf(topRight.x),
-                     (int16_t)roundf(topRight.y),
-                     (int16_t)roundf(bottomRight.x),
-                     (int16_t)roundf(bottomRight.y), colour);
-  frame.fillTriangle((int16_t)roundf(topLeft.x),
-                     (int16_t)roundf(topLeft.y),
-                     (int16_t)roundf(bottomRight.x),
-                     (int16_t)roundf(bottomRight.y),
-                     (int16_t)roundf(bottomLeft.x),
-                     (int16_t)roundf(bottomLeft.y), colour);
+  fillPitchedQuad(x, y, right, y, right, bottom, x, bottom,
+                  transform, colour);
 }
 
 static void fillPitchedBody(int16_t x, int16_t y, int16_t width,
@@ -2438,19 +2450,6 @@ static void drawPitchedRectOutline(int16_t x, int16_t y, int16_t width,
   drawRocketLine(right, y, right, bottom, transform, colour);
   drawRocketLine(right, bottom, x, bottom, transform, colour);
   drawRocketLine(x, bottom, x, y, transform, colour);
-}
-
-static void fillPitchedTriangle(float x1, float y1, float x2, float y2,
-                                float x3, float y3,
-                                const RocketTransform &transform,
-                                uint16_t colour) {
-  PointF first = transform.apply(x1, y1);
-  PointF second = transform.apply(x2, y2);
-  PointF third = transform.apply(x3, y3);
-  frame.fillTriangle((int16_t)roundf(first.x), (int16_t)roundf(first.y),
-                     (int16_t)roundf(second.x), (int16_t)roundf(second.y),
-                     (int16_t)roundf(third.x), (int16_t)roundf(third.y),
-                     colour);
 }
 
 static void drawPayload(const RocketGeometry &geometry, bool recoveryCapsule,
@@ -2473,9 +2472,9 @@ static void drawPayload(const RocketGeometry &geometry, bool recoveryCapsule,
   int16_t domeY = y + scaledSize(8.0f, scale);
 
   PointF domeCentre = transform.apply(centreX, domeY);
-  frame.fillCircle((int16_t)roundf(domeCentre.x),
-                   (int16_t)roundf(domeCentre.y),
-                   maxInt16(2, width / 2 - two), C_PAPER);
+  rocketRenderTarget->fillCircle(
+    (int16_t)roundf(domeCentre.x), (int16_t)roundf(domeCentre.y),
+    maxInt16(2, width / 2 - two), C_PAPER);
 
   fillPitchedRect(x + two, domeY, maxInt16(2, width - four),
                   maxInt16(2, y + height - domeY), transform, C_PAPER);
@@ -2552,31 +2551,54 @@ static void drawFuelWindow(int16_t stageX, int16_t stageY, int16_t stageWidth,
   }
 }
 
-static void drawEngineAssembly(int16_t centreX, int16_t bottomY,
-                               int16_t stageWidth, float scale,
+struct EngineGeometry {
+  int16_t centreX;
+  int16_t topY;
+  int16_t nozzleY;
+  int16_t throatWidth;
+  int16_t exitWidth;
+};
+
+static EngineGeometry engineGeometryFor(const StageGeometry &stage,
+                                        float scale) {
+  int16_t stageWidth = (int16_t)roundf(stage.width);
+  int16_t stageBottomY = (int16_t)roundf(stage.y + stage.height);
+  int16_t bellHeight = maxInt16(
+    scaledSize(7.0f, scale, 4),
+    (int16_t)roundf(stage.width * 0.26f));
+
+  return {
+    (int16_t)roundf(stage.x + stage.width * 0.5f),
+    stageBottomY - scaledSize(1.0f, scale),
+    (int16_t)(stageBottomY - scaledSize(1.0f, scale) + bellHeight),
+    maxInt16(scaledSize(5.0f, scale, 3),
+             (int16_t)roundf(stageWidth * 0.22f)),
+    maxInt16(scaledSize(9.0f, scale, 5),
+             (int16_t)roundf(stageWidth * 0.46f))
+  };
+}
+
+static void drawEngineAssembly(const StageGeometry &stage, float scale,
                                const RocketTransform &transform) {
-  int16_t bellWidth = stageWidth / 3;
+  EngineGeometry engine = engineGeometryFor(stage, scale);
+  int16_t throatHalfWidth = maxInt16(1, engine.throatWidth / 2);
+  int16_t exitHalfWidth = maxInt16(2, engine.exitWidth / 2);
 
-  bellWidth = maxInt16(scaledSize(6.0f, scale, 3), bellWidth);
-  int16_t two = scaledSize(2.0f, scale);
-  int16_t three = scaledSize(3.0f, scale);
-  int16_t five = scaledSize(5.0f, scale);
-  int16_t seven = scaledSize(7.0f, scale);
+  fillPitchedQuad(
+    engine.centreX - throatHalfWidth, engine.topY,
+    engine.centreX + throatHalfWidth, engine.topY,
+    engine.centreX + exitHalfWidth, engine.nozzleY,
+    engine.centreX - exitHalfWidth, engine.nozzleY,
+    transform, C_METAL_DARK);
 
-  fillPitchedTriangle(centreX - bellWidth / 2, bottomY - two,
-                      centreX + bellWidth / 2, bottomY - two,
-                      centreX, bottomY + five,
-                      transform, C_METAL_DARK);
-
-  drawPitchedHLine(centreX - bellWidth / 2, bottomY - two, bellWidth,
-                   transform, C_METAL);
-
-  drawRocketLine(centreX - bellWidth / 2, bottomY - three,
-                 centreX - bellWidth, bottomY - seven,
+  drawRocketLine(engine.centreX - throatHalfWidth, engine.topY,
+                 engine.centreX - exitHalfWidth, engine.nozzleY,
                  transform, C_METAL);
-
-  drawRocketLine(centreX + bellWidth / 2, bottomY - three,
-                 centreX + bellWidth, bottomY - seven,
+  drawRocketLine(engine.centreX - exitHalfWidth, engine.nozzleY,
+                 engine.centreX + exitHalfWidth, engine.nozzleY,
+                 transform, C_METAL);
+  drawRocketLine(engine.centreX + exitHalfWidth, engine.nozzleY,
+                 engine.centreX + throatHalfWidth, engine.topY,
                  transform, C_METAL);
 }
 
@@ -2652,8 +2674,7 @@ static void drawStageBody(const StageDefinition &definition,
                  scale, transform, now);
 
   if (active) {
-    drawEngineAssembly(x + width / 2, y + height, width, scale,
-                       transform);
+    drawEngineAssembly(geometry, scale, transform);
   }
 }
 
@@ -2661,11 +2682,9 @@ static void drawEngineFlame(const StageGeometry &activeGeometry,
                             float fuelFraction, float scale,
                             const RocketTransform &transform,
                             uint32_t now) {
-  int16_t centreX =
-    (int16_t)roundf(activeGeometry.x + activeGeometry.width * 0.5f);
-  int16_t nozzleY =
-    (int16_t)roundf(activeGeometry.y + activeGeometry.height) +
-    scaledSize(5.0f, scale);
+  EngineGeometry engine = engineGeometryFor(activeGeometry, scale);
+  int16_t centreX = engine.centreX;
+  int16_t nozzleY = engine.nozzleY;
 
   float flicker = sinf(now * 0.045f) * 0.045f +
                   sinf(now * 0.081f) * 0.025f;
@@ -2679,10 +2698,11 @@ static void drawEngineFlame(const StageGeometry &activeGeometry,
   float spaceAmount = smoothStep(45.0f, 165.0f,
                                  displayedAltitudeAt(game.altitude));
   int16_t outerLength = maxInt16(scaledSize(11.0f, scale, 7),
-    (int16_t)roundf((18.0f * scale + activeGeometry.width * 0.52f) * power));
-  int16_t baseHalfWidth = maxInt16(1, scaledSize(2.0f, scale) / 2);
+    (int16_t)roundf((11.0f * scale + activeGeometry.width * 0.82f) * power));
+  int16_t baseHalfWidth = maxInt16(
+    1, (int16_t)roundf(engine.exitWidth * 0.22f));
   int16_t shoulderHalfWidth = maxInt16(2, (int16_t)roundf(
-    activeGeometry.width * lerpFloat(0.18f, 0.26f, spaceAmount)));
+    activeGeometry.width * lerpFloat(0.22f, 0.30f, spaceAmount)));
   float tipDrift = (sinf(now * 0.031f) + sinf(now * 0.017f)) *
                    0.55f * scale;
 
@@ -2761,6 +2781,118 @@ static void updateRocketBounds(RocketGeometry &geometry, bool engineOn) {
                           geometry.bottomY + bottomMargin);
 }
 
+static void drawRocketComponents(const MissionDefinition &mission,
+                                 const RocketGeometry &geometry,
+                                 uint8_t activeStage, float activeFuel,
+                                 bool engineOn, uint32_t now,
+                                 const RocketTransform &transform) {
+  // Exhaust is behind the bell. Its first row still shares the exact nozzle
+  // coordinate, while the nozzle lip remains visible over it.
+  if (engineOn && geometry.stageCount > 0) {
+    drawEngineFlame(geometry.stages[geometry.stageCount - 1], activeFuel,
+                    geometry.visualScale, transform, now);
+  }
+
+  drawPayload(geometry, mission.recoverCapsule, transform);
+
+  for (uint8_t index = 0; index < geometry.stageCount; index++) {
+    const StageGeometry &stageGeometry = geometry.stages[index];
+    bool active = stageGeometry.sourceIndex == activeStage;
+    float fuel = active ? activeFuel : 1.0f;
+
+    drawStageBody(mission.stages[stageGeometry.sourceIndex], stageGeometry,
+                  fuel, active, geometry.visualScale, transform, now);
+  }
+}
+
+static void drawRotatedRocketLayer(float pivotX, float pivotY, float angle) {
+  uint16_t *pixels = rocketLayer.getBuffer();
+  if (pixels == nullptr) {
+    return;
+  }
+
+  int16_t sourceLeft = ROCKET_LAYER_W;
+  int16_t sourceTop = ROCKET_LAYER_H;
+  int16_t sourceRight = -1;
+  int16_t sourceBottom = -1;
+
+  for (int16_t y = 0; y < ROCKET_LAYER_H; y++) {
+    for (int16_t x = 0; x < ROCKET_LAYER_W; x++) {
+      if (pixels[y * ROCKET_LAYER_W + x] == 0) {
+        continue;
+      }
+
+      sourceLeft = minInt16(sourceLeft, x);
+      sourceTop = minInt16(sourceTop, y);
+      sourceRight = maxInt16(sourceRight, x);
+      sourceBottom = maxInt16(sourceBottom, y);
+    }
+  }
+
+  if (sourceRight < sourceLeft || sourceBottom < sourceTop) {
+    return;
+  }
+
+  PointF corners[4] = {
+    rotatePoint(sourceLeft - ROCKET_LAYER_PIVOT_X,
+                sourceTop - ROCKET_LAYER_PIVOT_Y, pivotX, pivotY, angle),
+    rotatePoint(sourceRight - ROCKET_LAYER_PIVOT_X,
+                sourceTop - ROCKET_LAYER_PIVOT_Y, pivotX, pivotY, angle),
+    rotatePoint(sourceRight - ROCKET_LAYER_PIVOT_X,
+                sourceBottom - ROCKET_LAYER_PIVOT_Y, pivotX, pivotY, angle),
+    rotatePoint(sourceLeft - ROCKET_LAYER_PIVOT_X,
+                sourceBottom - ROCKET_LAYER_PIVOT_Y, pivotX, pivotY, angle)
+  };
+
+  float minimumX = corners[0].x;
+  float maximumX = corners[0].x;
+  float minimumY = corners[0].y;
+  float maximumY = corners[0].y;
+  for (uint8_t index = 1; index < 4; index++) {
+    minimumX = minFloat(minimumX, corners[index].x);
+    maximumX = maxFloat(maximumX, corners[index].x);
+    minimumY = minFloat(minimumY, corners[index].y);
+    maximumY = maxFloat(maximumY, corners[index].y);
+  }
+
+  int16_t screenLeft = maxInt16(0, (int16_t)floorf(minimumX) - 1);
+  int16_t screenRight = minInt16(
+    SCREEN_W - 1, (int16_t)ceilf(maximumX) + 1);
+  int16_t screenTop = maxInt16(0, (int16_t)floorf(minimumY) - 1);
+  int16_t screenBottom = minInt16(
+    SCREEN_H - 1, (int16_t)ceilf(maximumY) + 1);
+  float cosine = cosf(angle);
+  float sine = sinf(angle);
+  uint16_t *framePixels = frame.getBuffer();
+
+  // Inverse mapping visits every destination pixel, avoiding the pinholes
+  // produced when source pixels are individually pushed through a rotation.
+  for (int16_t screenY = screenTop; screenY <= screenBottom; screenY++) {
+    float deltaX = screenLeft - pivotX;
+    float deltaY = screenY - pivotY;
+    float sourceX =
+      ROCKET_LAYER_PIVOT_X + deltaX * cosine + deltaY * sine;
+    float sourceY =
+      ROCKET_LAYER_PIVOT_Y - deltaX * sine + deltaY * cosine;
+
+    for (int16_t screenX = screenLeft; screenX <= screenRight; screenX++) {
+      int16_t sampledX = (int16_t)roundf(sourceX);
+      int16_t sampledY = (int16_t)roundf(sourceY);
+
+      if (sampledX >= sourceLeft && sampledX <= sourceRight &&
+          sampledY >= sourceTop && sampledY <= sourceBottom) {
+        uint16_t colour = pixels[sampledY * ROCKET_LAYER_W + sampledX];
+        if (colour != 0) {
+          framePixels[screenY * SCREEN_W + screenX] = colour;
+        }
+      }
+
+      sourceX += cosine;
+      sourceY -= sine;
+    }
+  }
+}
+
 static void drawRocket(const MissionDefinition &mission,
                        RocketGeometry &geometry, uint8_t activeStage,
                        float activeFuel, bool engineOn, uint32_t now) {
@@ -2774,23 +2906,36 @@ static void drawRocket(const MissionDefinition &mission,
   RocketTransform transform = {
     pivotX, pivotY, geometry.pitchRadians
   };
-  drawPayload(geometry, mission.recoverCapsule, transform);
 
-  for (uint8_t index = 0; index < geometry.stageCount; index++) {
-    const StageGeometry &stageGeometry = geometry.stages[index];
-
-    bool active = stageGeometry.sourceIndex == activeStage;
-
-    float fuel = active ? activeFuel : 1.0f;
-
-    drawStageBody(mission.stages[stageGeometry.sourceIndex], stageGeometry,
-                  fuel, active, geometry.visualScale, transform, now);
+  if (fabsf(geometry.pitchRadians) < 0.001f ||
+      rocketLayer.getBuffer() == nullptr) {
+    rocketRenderTarget = &frame;
+    drawRocketComponents(mission, geometry, activeStage, activeFuel,
+                         engineOn, now, transform);
+    return;
   }
 
-  if (engineOn && geometry.stageCount > 0) {
-    drawEngineFlame(geometry.stages[geometry.stageCount - 1], activeFuel,
-                    geometry.visualScale, transform, now);
+  RocketGeometry localGeometry = geometry;
+  float shiftX = ROCKET_LAYER_PIVOT_X - pivotX;
+  float shiftY = ROCKET_LAYER_PIVOT_Y - pivotY;
+  localGeometry.noseY += shiftY;
+  localGeometry.bottomY += shiftY;
+  localGeometry.payloadX += shiftX;
+  localGeometry.payloadY += shiftY;
+  for (uint8_t index = 0; index < localGeometry.stageCount; index++) {
+    localGeometry.stages[index].x += shiftX;
+    localGeometry.stages[index].y += shiftY;
   }
+
+  rocketLayer.fillScreen(0);
+  rocketRenderTarget = &rocketLayer;
+  RocketTransform localTransform = {
+    (float)ROCKET_LAYER_PIVOT_X, (float)ROCKET_LAYER_PIVOT_Y, 0.0f
+  };
+  drawRocketComponents(mission, localGeometry, activeStage, activeFuel,
+                       engineOn, now, localTransform);
+  rocketRenderTarget = &frame;
+  drawRotatedRocketLayer(pivotX, pivotY, geometry.pitchRadians);
 }
 
 // =============================================================================
@@ -2962,12 +3107,13 @@ static void beginExplosion(const char *reason) {
         -1);
     }
 
+    EngineGeometry engine = engineGeometryFor(stageGeometry,
+                                               geometry.visualScale);
     PointF engineCentre = transform.apply(
-      stageGeometry.x + stageGeometry.width * 0.5f,
-      stageGeometry.y + stageGeometry.height);
+      engine.centreX, (engine.topY + engine.nozzleY) * 0.5f);
     createFragment(FragmentType::ENGINE,
                    engineCentre.x, engineCentre.y,
-                   maxFloat(7.0f, stageGeometry.width * 0.35f), 7.0f,
+                   engine.exitWidth, engine.nozzleY - engine.topY,
                    randomGenerator.range(-70.0f, 70.0f),
                    randomGenerator.range(-40.0f, 70.0f), 0.0f,
                    randomGenerator.range(-6.0f, 6.0f), 3.0f, C_METAL, 0.0f, -1);
@@ -3088,16 +3234,15 @@ static void separateCurrentStage() {
       const StageGeometry &newActive =
         nextGeometry.stages[nextGeometry.stageCount - 1];
 
-      float nozzleX = newActive.x + newActive.width * 0.5f;
-      float nozzleY = newActive.y + newActive.height +
-        scaledSize(5.0f, nextGeometry.visualScale);
+      EngineGeometry engine = engineGeometryFor(
+        newActive, nextGeometry.visualScale);
       float nextPivotX =
         nextGeometry.payloadX + nextGeometry.payloadWidth * 0.5f;
       float nextPivotY = (nextGeometry.noseY + nextGeometry.bottomY) * 0.5f;
       RocketTransform nextTransform = {
         nextPivotX, nextPivotY, nextGeometry.pitchRadians
       };
-      PointF nozzle = nextTransform.apply(nozzleX, nozzleY);
+      PointF nozzle = nextTransform.apply(engine.centreX, engine.nozzleY);
 
       spawnFireBurst(nozzle.x, nozzle.y, 11, 30.0f);
       spawnSmokeBurst(nozzle.x, nozzle.y + 4.0f, 5, 17.0f);
@@ -3234,10 +3379,10 @@ static void spawnContinuousEngineEffects(const RocketGeometry &geometry) {
 
   const StageGeometry &activeGeometry =
     geometry.stages[geometry.stageCount - 1];
-  float nozzleX = activeGeometry.x + activeGeometry.width * 0.5f;
   float scale = geometry.visualScale;
-  float nozzleY = activeGeometry.y + activeGeometry.height +
-                  scaledSize(7.0f, scale);
+  EngineGeometry engine = engineGeometryFor(activeGeometry, scale);
+  float nozzleX = engine.centreX;
+  float nozzleY = engine.nozzleY;
   float pivotX = geometry.payloadX + geometry.payloadWidth * 0.5f;
   float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
   RocketTransform transform = {
@@ -3257,7 +3402,7 @@ static void spawnContinuousEngineEffects(const RocketGeometry &geometry) {
     float exhaustSpeed = randomGenerator.range(19.0f, 30.0f);
     spawnParticle(
       ParticleType::FIRE,
-      nozzleX + randomGenerator.range(-1.5f, 1.5f) * scale,
+      nozzleX + randomGenerator.range(-0.16f, 0.16f) * engine.exitWidth,
       nozzleY + randomGenerator.range(1.0f, 3.0f) * scale,
       exhaustAxisX * exhaustSpeed +
         randomGenerator.range(-5.0f, 5.0f) * (1.0f - spaceAmount * 0.35f),
@@ -3271,7 +3416,8 @@ static void spawnContinuousEngineEffects(const RocketGeometry &geometry) {
       randomGenerator.chance((1.0f - spaceAmount) * 0.58f)) {
     float exhaustSpeed = randomGenerator.range(13.0f, 23.0f);
     spawnParticle(ParticleType::SMOKE,
-                  nozzleX + randomGenerator.range(-3.0f, 3.0f) * scale,
+                  nozzleX + randomGenerator.range(-0.28f, 0.28f) *
+                    engine.exitWidth,
                   nozzleY + scaledSize(4.0f, scale),
                   exhaustAxisX * exhaustSpeed +
                     randomGenerator.range(-7.0f, 7.0f),
