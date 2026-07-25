@@ -40,6 +40,8 @@ static constexpr int16_t LCD_NATIVE_H = 320;
 
 // User-facing display brightness percentage. Keep this in the 0-100 range.
 static uint8_t displayBrightness = 50;  // 0-100 percent
+// Runtime switch for all onboard RGB status indication.
+static bool onboardLedEnabled = true;
 static constexpr uint8_t BACKLIGHT_CHANNEL = 0;
 
 #define LCD_ROTATION 2
@@ -530,9 +532,12 @@ struct Fragment : public SceneObject {
 
   float life = 0.0f;
   float gravity = 35.0f;
-  float relativeDrag = 0.0f;
   float cameraScale = 1.0f;
   float worldVelocity = 0.0f;
+  float worldAltitude = 0.0f;
+  float mass = 1.0f;
+  float minimumDragArea = 1.0f;
+  float maximumDragArea = 1.0f;
 
   uint16_t bodyColour = C_PAPER;
   uint16_t bandColour = C_ORANGE;
@@ -951,6 +956,7 @@ static void initializeSceneSeeds() {
 
 static float currentRocketVisualScale();
 static float gravityAtAltitude(float altitude);
+static float atmosphereDensityAtAltitude(float altitude);
 
 // =============================================================================
 // Particle system
@@ -1189,9 +1195,12 @@ static Fragment *createFragment(FragmentType type, float x, float y, float width
   fragment->spin = spin;
   fragment->life = life;
   fragment->gravity = 35.0f;
-  fragment->relativeDrag = 0.0f;
   fragment->cameraScale = 1.0f;
   fragment->worldVelocity = 0.0f;
+  fragment->worldAltitude = 0.0f;
+  fragment->mass = 1.0f;
+  fragment->minimumDragArea = 1.0f;
+  fragment->maximumDragArea = 1.0f;
   fragment->bodyColour = C_PAPER;
   fragment->bandColour = bandColour;
   fragment->fuelFraction = clamp01(fuelFraction);
@@ -1237,9 +1246,30 @@ static void updateFragments(float deltaSeconds) {
     fragment.x += fragment.velocityX * deltaSeconds;
 
     if (fragment.cameraTracked) {
-      fragment.worldVelocity -=
-        (gravityAtAltitude(game.altitude) + fragment.relativeDrag) *
-        deltaSeconds;
+      float gravity = gravityAtAltitude(fragment.worldAltitude);
+      float density = atmosphereDensityAtAltitude(fragment.worldAltitude);
+      float tumble = fabsf(sinf(fragment.rotation));
+      float dragArea = lerpFloat(fragment.minimumDragArea,
+                                 fragment.maximumDragArea, tumble);
+      float dragCoefficient = lerpFloat(0.72f, 1.35f, tumble);
+      float speedSquared = fragment.worldVelocity * fragment.worldVelocity;
+
+      // Fd = 1/2 rho Cd A v^2 and a = F/m. The scale maps the arcade world
+      // units to a readable ballistic fall without changing the relationship.
+      float dragAcceleration = 0.5f * density * dragCoefficient * dragArea *
+        speedSquared / maxFloat(1.0f, fragment.mass) * 0.0014f;
+      dragAcceleration = minFloat(5.0f, dragAcceleration);
+
+      float acceleration = -gravity;
+      if (fragment.worldVelocity > 0.0f) {
+        acceleration -= dragAcceleration;
+      } else if (fragment.worldVelocity < 0.0f) {
+        acceleration += dragAcceleration;
+      }
+
+      fragment.worldVelocity += acceleration * deltaSeconds;
+      fragment.worldAltitude = maxFloat(
+        0.0f, fragment.worldAltitude + fragment.worldVelocity * deltaSeconds);
       fragment.y -= fragment.worldVelocity * WORLD_PIXELS_PER_ALTITUDE *
                     deltaSeconds;
     } else {
@@ -2324,37 +2354,107 @@ static int16_t scaledSize(float size, float scale, int16_t minimum = 1) {
   return maxInt16(minimum, (int16_t)roundf(size * scale));
 }
 
-static int16_t rocketPitchOffset(float y, float pivotY, float pitchRadians) {
-  return (int16_t)roundf((pivotY - y) * tanf(pitchRadians));
+struct RocketTransform {
+  float pivotX;
+  float pivotY;
+  float angle;
+
+  PointF apply(float x, float y) const {
+    return rotatePoint(x - pivotX, y - pivotY,
+                       pivotX, pivotY, angle);
+  }
+};
+
+static void drawRocketLine(float x1, float y1, float x2, float y2,
+                           const RocketTransform &transform,
+                           uint16_t colour) {
+  PointF first = transform.apply(x1, y1);
+  PointF second = transform.apply(x2, y2);
+  frame.drawLine((int16_t)roundf(first.x), (int16_t)roundf(first.y),
+                 (int16_t)roundf(second.x), (int16_t)roundf(second.y),
+                 colour);
+}
+
+static void drawRocketPixel(float x, float y,
+                            const RocketTransform &transform,
+                            uint16_t colour) {
+  PointF point = transform.apply(x, y);
+  frame.drawPixel((int16_t)roundf(point.x), (int16_t)roundf(point.y), colour);
 }
 
 static void drawPitchedHLine(int16_t x, int16_t y, int16_t width,
-                             float pivotY, float pitchRadians,
+                             const RocketTransform &transform,
                              uint16_t colour) {
-  frame.drawFastHLine(x + rocketPitchOffset(y, pivotY, pitchRadians),
-                      y, width, colour);
+  drawRocketLine(x, y, x + maxInt16(1, width) - 1, y,
+                 transform, colour);
 }
 
 static void fillPitchedRect(int16_t x, int16_t y, int16_t width,
-                            int16_t height, float pivotY, float pitchRadians,
+                            int16_t height, const RocketTransform &transform,
                             uint16_t colour) {
-  for (int16_t row = 0; row < height; row++) {
-    drawPitchedHLine(x, y + row, width, pivotY, pitchRadians, colour);
+  int16_t right = x + maxInt16(1, width) - 1;
+  int16_t bottom = y + maxInt16(1, height) - 1;
+
+  if (width <= 1 || height <= 1) {
+    drawRocketLine(x, y, right, bottom, transform, colour);
+    return;
   }
+
+  PointF topLeft = transform.apply(x, y);
+  PointF topRight = transform.apply(right, y);
+  PointF bottomRight = transform.apply(right, bottom);
+  PointF bottomLeft = transform.apply(x, bottom);
+
+  // Transform each solid part once, then rasterise the resulting quad. Drawing
+  // independently rounded scanlines made a rigid stack look fragmented while
+  // it pitched, especially at the stage bands and interstage boundaries.
+  frame.fillTriangle((int16_t)roundf(topLeft.x),
+                     (int16_t)roundf(topLeft.y),
+                     (int16_t)roundf(topRight.x),
+                     (int16_t)roundf(topRight.y),
+                     (int16_t)roundf(bottomRight.x),
+                     (int16_t)roundf(bottomRight.y), colour);
+  frame.fillTriangle((int16_t)roundf(topLeft.x),
+                     (int16_t)roundf(topLeft.y),
+                     (int16_t)roundf(bottomRight.x),
+                     (int16_t)roundf(bottomRight.y),
+                     (int16_t)roundf(bottomLeft.x),
+                     (int16_t)roundf(bottomLeft.y), colour);
 }
 
 static void fillPitchedBody(int16_t x, int16_t y, int16_t width,
-                            int16_t height, float pivotY, float pitchRadians,
+                            int16_t height, const RocketTransform &transform,
                             uint16_t colour) {
-  for (int16_t row = 0; row < height; row++) {
-    int16_t inset = (row == 0 || row == height - 1) ? 1 : 0;
-    drawPitchedHLine(x + inset, y + row,
-                     maxInt16(1, width - inset * 2),
-                     pivotY, pitchRadians, colour);
-  }
+  fillPitchedRect(x, y, width, height, transform, colour);
 }
 
-static void drawPayload(const RocketGeometry &geometry, bool recoveryCapsule) {
+static void drawPitchedRectOutline(int16_t x, int16_t y, int16_t width,
+                                   int16_t height,
+                                   const RocketTransform &transform,
+                                   uint16_t colour) {
+  int16_t right = x + maxInt16(1, width) - 1;
+  int16_t bottom = y + maxInt16(1, height) - 1;
+  drawRocketLine(x, y, right, y, transform, colour);
+  drawRocketLine(right, y, right, bottom, transform, colour);
+  drawRocketLine(right, bottom, x, bottom, transform, colour);
+  drawRocketLine(x, bottom, x, y, transform, colour);
+}
+
+static void fillPitchedTriangle(float x1, float y1, float x2, float y2,
+                                float x3, float y3,
+                                const RocketTransform &transform,
+                                uint16_t colour) {
+  PointF first = transform.apply(x1, y1);
+  PointF second = transform.apply(x2, y2);
+  PointF third = transform.apply(x3, y3);
+  frame.fillTriangle((int16_t)roundf(first.x), (int16_t)roundf(first.y),
+                     (int16_t)roundf(second.x), (int16_t)roundf(second.y),
+                     (int16_t)roundf(third.x), (int16_t)roundf(third.y),
+                     colour);
+}
+
+static void drawPayload(const RocketGeometry &geometry, bool recoveryCapsule,
+                        const RocketTransform &transform) {
   int16_t x = (int16_t)roundf(geometry.payloadX);
 
   int16_t y = (int16_t)roundf(geometry.payloadY);
@@ -2365,8 +2465,6 @@ static void drawPayload(const RocketGeometry &geometry, bool recoveryCapsule) {
 
   int16_t centreX = x + width / 2;
   float scale = geometry.visualScale;
-  float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
-  float pitch = geometry.pitchRadians;
   int16_t one = scaledSize(1.0f, scale);
   int16_t two = scaledSize(2.0f, scale);
   int16_t three = scaledSize(3.0f, scale);
@@ -2374,44 +2472,41 @@ static void drawPayload(const RocketGeometry &geometry, bool recoveryCapsule) {
   int16_t five = scaledSize(5.0f, scale);
   int16_t domeY = y + scaledSize(8.0f, scale);
 
-  frame.fillCircle(centreX + rocketPitchOffset(domeY, pivotY, pitch), domeY,
+  PointF domeCentre = transform.apply(centreX, domeY);
+  frame.fillCircle((int16_t)roundf(domeCentre.x),
+                   (int16_t)roundf(domeCentre.y),
                    maxInt16(2, width / 2 - two), C_PAPER);
 
   fillPitchedRect(x + two, domeY, maxInt16(2, width - four),
-                  maxInt16(2, y + height - domeY), pivotY, pitch, C_PAPER);
+                  maxInt16(2, y + height - domeY), transform, C_PAPER);
 
   fillPitchedRect(x + three, y + scaledSize(7.0f, scale), three,
                   maxInt16(2, height - scaledSize(10.0f, scale)),
-                  pivotY, pitch, C_HIGHLIGHT);
+                  transform, C_HIGHLIGHT);
 
   fillPitchedRect(x + width - five, domeY, two,
                   maxInt16(2, height - scaledSize(10.0f, scale)),
-                  pivotY, pitch, C_METAL);
+                  transform, C_METAL);
 
   int16_t windowWidth = scaledSize(8.0f, scale, 4);
   int16_t windowHeight = scaledSize(6.0f, scale, 3);
-  int16_t windowShift = rocketPitchOffset(domeY + windowHeight / 2,
-                                           pivotY, pitch);
-  frame.fillRoundRect(centreX - windowWidth / 2 + windowShift, domeY,
-                      windowWidth,
-                      windowHeight, one, C_GLASS);
+  fillPitchedRect(centreX - windowWidth / 2, domeY,
+                  windowWidth, windowHeight, transform, C_GLASS);
 
-  int16_t detailShift = rocketPitchOffset(domeY + one, pivotY, pitch);
-  frame.drawPixel(centreX - two + detailShift, domeY + one, C_CYAN);
-
-  frame.drawPixel(centreX - one + detailShift, domeY + one, C_WHITE);
+  drawRocketPixel(centreX - two, domeY + one, transform, C_CYAN);
+  drawRocketPixel(centreX - one, domeY + one, transform, C_WHITE);
 
   fillPitchedRect(x + three, y + height - five,
                   maxInt16(2, width - scaledSize(6.0f, scale)), four,
-                  pivotY, pitch, recoveryCapsule ? C_CYAN : C_PURPLE);
+                  transform, recoveryCapsule ? C_CYAN : C_PURPLE);
 
   drawPitchedHLine(x + two, y + height - one,
-                   maxInt16(2, width - four), pivotY, pitch, C_METAL_DARK);
+                   maxInt16(2, width - four), transform, C_METAL_DARK);
 }
 
 static void drawFuelWindow(int16_t stageX, int16_t stageY, int16_t stageWidth,
                            int16_t stageHeight, float fuelFraction, bool active,
-                           float scale, float pivotY, float pitch,
+                           float scale, const RocketTransform &transform,
                            uint32_t now) {
   int16_t one = scaledSize(1.0f, scale);
   int16_t two = scaledSize(2.0f, scale);
@@ -2425,11 +2520,11 @@ static void drawFuelWindow(int16_t stageX, int16_t stageY, int16_t stageWidth,
   windowHeight = maxInt16(scaledSize(8.0f, scale, 4), windowHeight);
 
   fillPitchedRect(windowX, windowY, windowWidth, windowHeight,
-                  pivotY, pitch, C_GLASS_EDGE);
+                  transform, C_GLASS_EDGE);
 
   fillPitchedRect(windowX + one, windowY + one,
                   maxInt16(1, windowWidth - two),
-                  maxInt16(1, windowHeight - two), pivotY, pitch, C_GLASS);
+                  maxInt16(1, windowHeight - two), transform, C_GLASS);
 
   int16_t insideHeight = maxInt16(1, windowHeight - two);
 
@@ -2440,27 +2535,26 @@ static void drawFuelWindow(int16_t stageX, int16_t stageY, int16_t stageWidth,
 
     fillPitchedRect(windowX + one, fuelY,
                     maxInt16(1, windowWidth - two), fuelHeight,
-                    pivotY, pitch, C_FUEL);
+                    transform, C_FUEL);
 
     drawPitchedHLine(windowX + one, fuelY,
-                     maxInt16(1, windowWidth - two), pivotY, pitch, C_WHITE);
+                     maxInt16(1, windowWidth - two), transform, C_WHITE);
   }
 
   fillPitchedRect(windowX + one, windowY + two, one,
                   maxInt16((int16_t)1, windowHeight / 3),
-                  pivotY, pitch, C565(112, 168, 179));
+                  transform, C565(112, 168, 179));
 
   if (active && fuelFraction < 0.16f && ((now / 110) & 1U) == 0) {
-    int16_t shift = rocketPitchOffset(windowY + windowHeight / 2,
-                                      pivotY, pitch);
-    frame.drawRoundRect(windowX - one + shift, windowY - one,
-                        windowWidth + two, windowHeight + two, one, C_RED);
+    drawPitchedRectOutline(windowX - one, windowY - one,
+                           windowWidth + two, windowHeight + two,
+                           transform, C_RED);
   }
 }
 
 static void drawEngineAssembly(int16_t centreX, int16_t bottomY,
                                int16_t stageWidth, float scale,
-                               float pivotY, float pitch) {
+                               const RocketTransform &transform) {
   int16_t bellWidth = stageWidth / 3;
 
   bellWidth = maxInt16(scaledSize(6.0f, scale, 3), bellWidth);
@@ -2469,34 +2563,27 @@ static void drawEngineAssembly(int16_t centreX, int16_t bottomY,
   int16_t five = scaledSize(5.0f, scale);
   int16_t seven = scaledSize(7.0f, scale);
 
-  int16_t topShift = rocketPitchOffset(bottomY - two, pivotY, pitch);
-  int16_t tipShift = rocketPitchOffset(bottomY + five, pivotY, pitch);
-  frame.fillTriangle(centreX - bellWidth / 2 + topShift, bottomY - two,
-                     centreX + bellWidth / 2 + topShift, bottomY - two,
-                     centreX + tipShift, bottomY + five,
-                     C_METAL_DARK);
+  fillPitchedTriangle(centreX - bellWidth / 2, bottomY - two,
+                      centreX + bellWidth / 2, bottomY - two,
+                      centreX, bottomY + five,
+                      transform, C_METAL_DARK);
 
   drawPitchedHLine(centreX - bellWidth / 2, bottomY - two, bellWidth,
-                   pivotY, pitch, C_METAL);
+                   transform, C_METAL);
 
-  frame.drawLine(centreX - bellWidth / 2 +
-                   rocketPitchOffset(bottomY - three, pivotY, pitch),
-                 bottomY - three,
-                 centreX - bellWidth +
-                   rocketPitchOffset(bottomY - seven, pivotY, pitch),
-                 bottomY - seven, C_METAL);
+  drawRocketLine(centreX - bellWidth / 2, bottomY - three,
+                 centreX - bellWidth, bottomY - seven,
+                 transform, C_METAL);
 
-  frame.drawLine(centreX + bellWidth / 2 +
-                   rocketPitchOffset(bottomY - three, pivotY, pitch),
-                 bottomY - three,
-                 centreX + bellWidth +
-                   rocketPitchOffset(bottomY - seven, pivotY, pitch),
-                 bottomY - seven, C_METAL);
+  drawRocketLine(centreX + bellWidth / 2, bottomY - three,
+                 centreX + bellWidth, bottomY - seven,
+                 transform, C_METAL);
 }
 
 static void drawStageBody(const StageDefinition &definition,
                           const StageGeometry &geometry, float fuelFraction,
-                          bool active, float scale, float pivotY, float pitch,
+                          bool active, float scale,
+                          const RocketTransform &transform,
                           uint32_t now) {
   int16_t x = (int16_t)roundf(geometry.x);
 
@@ -2512,22 +2599,22 @@ static void drawStageBody(const StageDefinition &definition,
   int16_t five = scaledSize(5.0f, scale);
 
   fillPitchedBody(x + two, y + two, width, height,
-                  pivotY, pitch, C_BLACK);
+                  transform, C_BLACK);
 
-  fillPitchedBody(x, y, width, height, pivotY, pitch, C_PAPER);
+  fillPitchedBody(x, y, width, height, transform, C_PAPER);
 
   fillPitchedRect(x + two, y + two, maxInt16(two, width / 6),
-                  maxInt16(2, height - four), pivotY, pitch, C_HIGHLIGHT);
+                  maxInt16(2, height - four), transform, C_HIGHLIGHT);
 
   fillPitchedRect(x + width - four, y + two, two,
-                  maxInt16(2, height - four), pivotY, pitch, C_METAL);
+                  maxInt16(2, height - four), transform, C_METAL);
 
   int16_t bandY = y + maxInt16(five, height / 5);
 
-  fillPitchedRect(x, bandY, width, four, pivotY, pitch,
+  fillPitchedRect(x, bandY, width, four, transform,
                   definition.bandColour);
 
-  drawPitchedHLine(x, bandY, width, pivotY, pitch,
+  drawPitchedHLine(x, bandY, width, transform,
                    blend565(definition.bandColour, C_WHITE, 70));
 
   uint16_t collarColour = C_BORDER;
@@ -2543,38 +2630,37 @@ static void drawStageBody(const StageDefinition &definition,
   }
 
   fillPitchedRect(x - two, y - two, width + four, three,
-                  pivotY, pitch, collarColour);
+                  transform, collarColour);
 
   drawPitchedHLine(x - one, y + one, width + two,
-                   pivotY, pitch, C_METAL_DARK);
+                   transform, C_METAL_DARK);
 
   fillPitchedRect(x, y + height - five, width, five,
-                  pivotY, pitch, C_METAL_DARK);
+                  transform, C_METAL_DARK);
 
   drawPitchedHLine(x + two, y + height - five,
-                   maxInt16(2, width - four), pivotY, pitch, C_METAL);
+                   maxInt16(2, width - four), transform, C_METAL);
 
   for (int16_t rivetY = y + scaledSize(12.0f, scale);
        rivetY < y + height - scaledSize(8.0f, scale);
        rivetY += scaledSize(13.0f, scale)) {
-    int16_t shift = rocketPitchOffset(rivetY, pivotY, pitch);
-    frame.drawPixel(x + two + shift, rivetY, C_METAL_DARK);
-
-    frame.drawPixel(x + width - three + shift, rivetY, C_METAL_DARK);
+    drawRocketPixel(x + two, rivetY, transform, C_METAL_DARK);
+    drawRocketPixel(x + width - three, rivetY, transform, C_METAL_DARK);
   }
 
-  drawFuelWindow(x, y, width, height, fuelFraction, active, scale,
-                 pivotY, pitch, now);
+  drawFuelWindow(x, y, width, height, fuelFraction, active,
+                 scale, transform, now);
 
   if (active) {
     drawEngineAssembly(x + width / 2, y + height, width, scale,
-                       pivotY, pitch);
+                       transform);
   }
 }
 
 static void drawEngineFlame(const StageGeometry &activeGeometry,
-                            float fuelFraction, float scale, float pivotY,
-                            float pitch, uint32_t now) {
+                            float fuelFraction, float scale,
+                            const RocketTransform &transform,
+                            uint32_t now) {
   int16_t centreX =
     (int16_t)roundf(activeGeometry.x + activeGeometry.width * 0.5f);
   int16_t nozzleY =
@@ -2614,10 +2700,9 @@ static void drawEngineFlame(const StageGeometry &activeGeometry,
       sinf(now * 0.023f + row * 0.61f) * 0.35f * amount);
     int16_t edgeVariation =
       amount > 0.55f && ((row + (int16_t)(now / 73U)) % 7 == 0) ? 1 : 0;
-    int16_t axisShift = rocketPitchOffset(nozzleY + row, pivotY, pitch);
-    frame.drawFastHLine(centreX + axisShift + centreDrift - halfWidth,
-                        nozzleY + row, halfWidth * 2 + 1 + edgeVariation,
-                        C_RED);
+    drawPitchedHLine(centreX + centreDrift - halfWidth, nozzleY + row,
+                     halfWidth * 2 + 1 + edgeVariation,
+                     transform, C_RED);
   }
 
   int16_t middleLength = maxInt16(4, (int16_t)roundf(outerLength * 0.80f));
@@ -2630,9 +2715,8 @@ static void drawEngineFlame(const StageGeometry &activeGeometry,
     int16_t halfWidth = maxInt16(1, (int16_t)roundf(
       (baseHalfWidth + (middleShoulder - baseHalfWidth) * expansion) * tail));
     int16_t centreDrift = (int16_t)roundf(tipDrift * amount * 0.45f);
-    int16_t axisShift = rocketPitchOffset(nozzleY + row, pivotY, pitch);
-    frame.drawFastHLine(centreX + axisShift + centreDrift - halfWidth,
-                        nozzleY + row, halfWidth * 2 + 1, C_ORANGE);
+    drawPitchedHLine(centreX + centreDrift - halfWidth, nozzleY + row,
+                     halfWidth * 2 + 1, transform, C_ORANGE);
   }
 
   int16_t coreLength = maxInt16(4, (int16_t)roundf(outerLength * 0.42f));
@@ -2642,10 +2726,9 @@ static void drawEngineFlame(const StageGeometry &activeGeometry,
     float diamond = fabsf(sinf(amount * 2.0f * 3.1415926f));
     int16_t halfWidth = maxInt16(0, (int16_t)roundf(
       (1.0f - amount) * coreShoulder * (0.55f + diamond * 0.45f)));
-    int16_t axisShift = rocketPitchOffset(nozzleY + row, pivotY, pitch);
-    frame.drawFastHLine(centreX + axisShift - halfWidth, nozzleY + row,
-                        halfWidth * 2 + 1,
-                        amount < 0.62f ? C_WHITE : C_YELLOW);
+    drawPitchedHLine(centreX - halfWidth, nozzleY + row,
+                     halfWidth * 2 + 1, transform,
+                     amount < 0.62f ? C_WHITE : C_YELLOW);
   }
 }
 
@@ -2686,8 +2769,12 @@ static void drawRocket(const MissionDefinition &mission,
     return;
   }
 
+  float pivotX = geometry.payloadX + geometry.payloadWidth * 0.5f;
   float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
-  drawPayload(geometry, mission.recoverCapsule);
+  RocketTransform transform = {
+    pivotX, pivotY, geometry.pitchRadians
+  };
+  drawPayload(geometry, mission.recoverCapsule, transform);
 
   for (uint8_t index = 0; index < geometry.stageCount; index++) {
     const StageGeometry &stageGeometry = geometry.stages[index];
@@ -2697,14 +2784,12 @@ static void drawRocket(const MissionDefinition &mission,
     float fuel = active ? activeFuel : 1.0f;
 
     drawStageBody(mission.stages[stageGeometry.sourceIndex], stageGeometry,
-                  fuel, active, geometry.visualScale, pivotY,
-                  geometry.pitchRadians, now);
+                  fuel, active, geometry.visualScale, transform, now);
   }
 
   if (engineOn && geometry.stageCount > 0) {
     drawEngineFlame(geometry.stages[geometry.stageCount - 1], activeFuel,
-                    geometry.visualScale, pivotY,
-                    geometry.pitchRadians, now);
+                    geometry.visualScale, transform, now);
   }
 }
 
@@ -2723,34 +2808,39 @@ static void setFeedback(const char *message, uint16_t colour, float duration) {
 
 static void createWholeDetachedStage(const StageDefinition &definition,
                                      const StageGeometry &geometry,
-                                     float fuelFraction, float pivotY,
-                                     float pitch, bool finalStage) {
+                                     float fuelFraction,
+                                     const RocketTransform &transform) {
   int16_t bandPosition =
     maxInt16((int16_t)5, (int16_t)(geometry.height / 5.0f));
   float side = randomGenerator.chance(0.5f) ? -1.0f : 1.0f;
+  PointF centre = transform.apply(
+    geometry.x + geometry.width * 0.5f,
+    geometry.y + geometry.height * 0.5f);
 
   Fragment *stage = createFragment(
     FragmentType::WHOLE_STAGE,
-    geometry.x + geometry.width * 0.5f +
-      rocketPitchOffset(geometry.y + geometry.height * 0.5f,
-                        pivotY, pitch),
-    geometry.y + geometry.height * 0.5f,
+    centre.x, centre.y,
     geometry.width, geometry.height,
     side * randomGenerator.range(6.0f, 11.0f), 0.0f,
-    pitch, side * randomGenerator.range(0.28f, 0.52f), 5.2f,
+    transform.angle, side * randomGenerator.range(0.28f, 0.52f), 5.2f,
     definition.bandColour, fuelFraction, (int8_t)bandPosition);
 
-  // Screen Y is shifted by camera movement; the stored world velocity supplies
-  // the opposite half of that transform and preserves ascent momentum. The
-  // final stage needs more relative drag because neither vehicle accelerates
-  // after separation; otherwise they coast together and appear stationary.
+  float physicalScale = maxFloat(0.65f, currentRocketVisualScale());
+  float physicalWidth = geometry.width / physicalScale;
+  float physicalHeight = geometry.height / physicalScale;
+  stage->mass = maxFloat(
+    1.0f, physicalWidth * physicalWidth * physicalHeight * 0.0024f);
+  stage->minimumDragArea = physicalWidth * physicalWidth;
+  stage->maximumDragArea = physicalWidth * physicalHeight;
+
+  // A fixed separator impulse produces delta-v = impulse / mass, so lighter
+  // upper stages move away faster while every stage retains the vehicle's
+  // post-result upward velocity.
+  float separationDeltaV = clampFloat(450.0f / stage->mass, 1.8f, 4.8f);
   stage->cameraTracked = true;
-  float separationLoss = finalStage
-    ? randomGenerator.range(2.8f, 3.6f)
-    : randomGenerator.range(1.8f, 2.7f);
-  stage->worldVelocity = game.velocity - separationLoss;
-  stage->relativeDrag = finalStage ? 3.2f : 1.8f;
-  stage->cameraScale = currentRocketVisualScale();
+  stage->worldVelocity = game.velocity - separationDeltaV;
+  stage->worldAltitude = game.altitude;
+  stage->cameraScale = physicalScale;
 }
 
 static void beginExplosion(const char *reason) {
@@ -2761,12 +2851,16 @@ static void beginExplosion(const char *reason) {
   RocketGeometry geometry;
   buildCurrentRocketGeometry(geometry);
 
-  game.explosionY =
+  float pivotX = geometry.payloadX + geometry.payloadWidth * 0.5f;
+  float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
+  RocketTransform transform = {
+    pivotX, pivotY, geometry.pitchRadians
+  };
+  float localExplosionY =
     geometry.noseY + (geometry.bottomY - geometry.noseY) * 0.62f;
-  game.explosionX = geometry.payloadX + geometry.payloadWidth * 0.5f +
-    rocketPitchOffset(
-    game.explosionY, (geometry.noseY + geometry.bottomY) * 0.5f,
-    geometry.pitchRadians);
+  PointF explosion = transform.apply(pivotX, localExplosionY);
+  game.explosionX = explosion.x;
+  game.explosionY = explosion.y;
 
   strncpy(game.failureReason, reason, sizeof(game.failureReason) - 1);
 
@@ -2780,12 +2874,15 @@ static void beginExplosion(const char *reason) {
   game.flash = 1.0f;
   game.shake = 10.0f;
 
+  PointF capsuleCentre = transform.apply(
+    geometry.payloadX + geometry.payloadWidth * 0.5f,
+    geometry.payloadY + geometry.payloadHeight * 0.5f);
   createFragment(
-    FragmentType::CAPSULE, geometry.payloadX + geometry.payloadWidth * 0.5f,
-    geometry.payloadY + geometry.payloadHeight * 0.5f, geometry.payloadWidth,
+    FragmentType::CAPSULE, capsuleCentre.x, capsuleCentre.y, geometry.payloadWidth,
     geometry.payloadHeight, randomGenerator.range(-48.0f, 48.0f),
     randomGenerator.range(-92.0f, -34.0f),
-    randomGenerator.range(-0.25f, 0.25f), randomGenerator.range(-4.4f, 4.4f),
+    geometry.pitchRadians + randomGenerator.range(-0.25f, 0.25f),
+    randomGenerator.range(-4.4f, 4.4f),
     3.7f, currentMission().recoverCapsule ? C_CYAN : C_PURPLE, 0.0f, -1);
 
   for (uint8_t geometryIndex = 0; geometryIndex < geometry.stageCount;
@@ -2809,6 +2906,8 @@ static void beginExplosion(const char *reason) {
       float sliceTop = slice * sliceHeight;
 
       float sliceCentreY = stageGeometry.y + sliceTop + sliceHeight * 0.5f;
+      PointF sliceCentre = transform.apply(
+        stageGeometry.x + stageGeometry.width * 0.5f, sliceCentreY);
 
       int8_t localBand = -1;
 
@@ -2816,10 +2915,9 @@ static void beginExplosion(const char *reason) {
         localBand = (int8_t)(originalBandY - sliceTop);
       }
 
-      float deltaX =
-        stageGeometry.x + stageGeometry.width * 0.5f - game.explosionX;
+      float deltaX = sliceCentre.x - game.explosionX;
 
-      float deltaY = sliceCentreY - game.explosionY;
+      float deltaY = sliceCentre.y - game.explosionY;
 
       float distance = sqrtf(deltaX * deltaX + deltaY * deltaY);
 
@@ -2834,11 +2932,12 @@ static void beginExplosion(const char *reason) {
       float force = randomGenerator.range(38.0f, 86.0f);
 
       createFragment(FragmentType::STAGE_SLICE,
-                     stageGeometry.x + stageGeometry.width * 0.5f, sliceCentreY,
+                     sliceCentre.x, sliceCentre.y,
                      stageGeometry.width, sliceHeight - 1.0f,
                      radialX * force + randomGenerator.range(-32.0f, 32.0f),
                      radialY * force + randomGenerator.range(-42.0f, 22.0f),
-                     randomGenerator.range(-0.18f, 0.18f),
+                     geometry.pitchRadians +
+                       randomGenerator.range(-0.18f, 0.18f),
                      randomGenerator.range(-5.2f, 5.2f),
                      randomGenerator.range(3.0f, 4.2f), definition.bandColour,
                      stageFuel, localBand);
@@ -2846,21 +2945,28 @@ static void beginExplosion(const char *reason) {
 
     for (uint8_t side = 0; side < 2; side++) {
       float sideDirection = side == 0 ? -1.0f : 1.0f;
+      float panelY = stageGeometry.y + stageGeometry.height *
+        randomGenerator.range(0.25f, 0.75f);
+      PointF panelCentre = transform.apply(
+        stageGeometry.x + stageGeometry.width *
+          (side == 0 ? 0.12f : 0.88f),
+        panelY);
 
       createFragment(
         FragmentType::SIDE_PANEL,
-        stageGeometry.x + stageGeometry.width * (side == 0 ? 0.12f : 0.88f),
-        stageGeometry.y + stageGeometry.height * randomGenerator.range(0.25f, 0.75f),
+        panelCentre.x, panelCentre.y,
         4.0f, stageGeometry.height * randomGenerator.range(0.28f, 0.52f),
         sideDirection * randomGenerator.range(55.0f, 105.0f),
-        randomGenerator.range(-72.0f, 35.0f), 0.0f,
+        randomGenerator.range(-72.0f, 35.0f), geometry.pitchRadians,
         randomGenerator.range(-7.0f, 7.0f), 2.8f, definition.bandColour, 0.0f,
         -1);
     }
 
+    PointF engineCentre = transform.apply(
+      stageGeometry.x + stageGeometry.width * 0.5f,
+      stageGeometry.y + stageGeometry.height);
     createFragment(FragmentType::ENGINE,
-                   stageGeometry.x + stageGeometry.width * 0.5f,
-                   stageGeometry.y + stageGeometry.height,
+                   engineCentre.x, engineCentre.y,
                    maxFloat(7.0f, stageGeometry.width * 0.35f), 7.0f,
                    randomGenerator.range(-70.0f, 70.0f),
                    randomGenerator.range(-40.0f, 70.0f), 0.0f,
@@ -2907,17 +3013,17 @@ static void separateCurrentStage() {
 
   float remainingFuel = clamp01(1.0f - progress);
 
+  float pivotX = geometry.payloadX + geometry.payloadWidth * 0.5f;
   float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
-  bool finalStage = game.activeStage + 1 >= currentMission().stageCount;
-  createWholeDetachedStage(*stage, activeGeometry, remainingFuel,
-                           pivotY, geometry.pitchRadians, finalStage);
+  RocketTransform transform = {
+    pivotX, pivotY, geometry.pitchRadians
+  };
+  PointF seam = transform.apply(
+    activeGeometry.x + activeGeometry.width * 0.5f,
+    activeGeometry.y);
 
-  float seamX = activeGeometry.x + activeGeometry.width * 0.5f +
-    rocketPitchOffset(activeGeometry.y, pivotY, geometry.pitchRadians);
-  float seamY = activeGeometry.y;
-
-  spawnSparkBurst(seamX, seamY, 15, C_GREEN);
-  spawnSmokeBurst(seamX, seamY + 2.0f, 7, 17.0f);
+  spawnSparkBurst(seam.x, seam.y, 15, C_GREEN);
+  spawnSmokeBurst(seam.x, seam.y + 2.0f, 7, 17.0f);
 
   char stageFeedback[20];
   uint8_t separatedStage = game.activeStage + 1;
@@ -2954,6 +3060,10 @@ static void separateCurrentStage() {
     game.shake = 5.0f;
   }
 
+  // Create the detached body after applying the staging result so both bodies
+  // inherit the same post-separation trajectory before the mass-based impulse.
+  createWholeDetachedStage(*stage, activeGeometry, remainingFuel, transform);
+
   game.activeStage++;
   game.stageElapsed = 0.0f;
   game.stageBurnoutCueShown = false;
@@ -2981,12 +3091,16 @@ static void separateCurrentStage() {
       float nozzleX = newActive.x + newActive.width * 0.5f;
       float nozzleY = newActive.y + newActive.height +
         scaledSize(5.0f, nextGeometry.visualScale);
+      float nextPivotX =
+        nextGeometry.payloadX + nextGeometry.payloadWidth * 0.5f;
       float nextPivotY = (nextGeometry.noseY + nextGeometry.bottomY) * 0.5f;
-      nozzleX += rocketPitchOffset(nozzleY, nextPivotY,
-                                   nextGeometry.pitchRadians);
+      RocketTransform nextTransform = {
+        nextPivotX, nextPivotY, nextGeometry.pitchRadians
+      };
+      PointF nozzle = nextTransform.apply(nozzleX, nozzleY);
 
-      spawnFireBurst(nozzleX, nozzleY, 11, 30.0f);
-      spawnSmokeBurst(nozzleX, nozzleY + 4.0f, 5, 17.0f);
+      spawnFireBurst(nozzle.x, nozzle.y, 11, 30.0f);
+      spawnSmokeBurst(nozzle.x, nozzle.y + 4.0f, 5, 17.0f);
     }
   }
 }
@@ -3105,7 +3219,12 @@ static void continueCampaignFromResult() {
 // =============================================================================
 
 static float gravityAtAltitude(float altitude) {
-  return lerpFloat(1.90f, 1.15f, smoothStep(0.0f, 1500.0f, altitude));
+  return lerpFloat(2.35f, 1.45f, smoothStep(0.0f, 1500.0f, altitude));
+}
+
+static float atmosphereDensityAtAltitude(float altitude) {
+  // Displayed kilometres are the mission-independent atmospheric scale.
+  return expf(-displayedAltitudeAt(maxFloat(0.0f, altitude)) / 18.0f);
 }
 
 static void spawnContinuousEngineEffects(const RocketGeometry &geometry) {
@@ -3119,8 +3238,14 @@ static void spawnContinuousEngineEffects(const RocketGeometry &geometry) {
   float scale = geometry.visualScale;
   float nozzleY = activeGeometry.y + activeGeometry.height +
                   scaledSize(7.0f, scale);
+  float pivotX = geometry.payloadX + geometry.payloadWidth * 0.5f;
   float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
-  nozzleX += rocketPitchOffset(nozzleY, pivotY, geometry.pitchRadians);
+  RocketTransform transform = {
+    pivotX, pivotY, geometry.pitchRadians
+  };
+  PointF nozzle = transform.apply(nozzleX, nozzleY);
+  nozzleX = nozzle.x;
+  nozzleY = nozzle.y;
   float spaceAmount = smoothStep(35.0f, 150.0f,
                                  displayedAltitudeAt(game.altitude));
   float inheritedScreenVelocity =
@@ -3643,7 +3768,15 @@ static void drawRecoveryScreen(uint32_t now) {
   capsuleGeometry.payloadY = capsuleY + 7;
   capsuleGeometry.payloadWidth = 18;
   capsuleGeometry.payloadHeight = 20;
-  drawPayload(capsuleGeometry, true);
+  capsuleGeometry.noseY = capsuleGeometry.payloadY;
+  capsuleGeometry.bottomY =
+    capsuleGeometry.payloadY + capsuleGeometry.payloadHeight;
+  RocketTransform capsuleTransform = {
+    (float)centreX,
+    (capsuleGeometry.noseY + capsuleGeometry.bottomY) * 0.5f,
+    0.0f
+  };
+  drawPayload(capsuleGeometry, true, capsuleTransform);
 
   frame.fillRoundRect(48, 294, 76, 19, 4, C_PANEL);
   frame.drawRoundRect(48, 294, 76, 19, 4, C_BORDER);
@@ -3682,15 +3815,19 @@ static void drawReentryEffects(const RocketGeometry &geometry, uint32_t now) {
     return;
   }
 
-  int16_t centreX = (int16_t)roundf(
-    geometry.payloadX + geometry.payloadWidth * 0.5f);
-  int16_t payloadTop = (int16_t)roundf(geometry.payloadY);
-  int16_t bottomY = (int16_t)roundf(
-    geometry.payloadY + geometry.payloadHeight);
+  float pivotX = geometry.payloadX + geometry.payloadWidth * 0.5f;
   float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
-  centreX += rocketPitchOffset(
-    geometry.payloadY + geometry.payloadHeight * 0.5f,
-    pivotY, geometry.pitchRadians);
+  RocketTransform transform = {
+    pivotX, pivotY, geometry.pitchRadians
+  };
+  PointF payloadCentre = transform.apply(
+    pivotX, geometry.payloadY + geometry.payloadHeight * 0.5f);
+  PointF payloadTopPoint = transform.apply(pivotX, geometry.payloadY);
+  PointF payloadBottomPoint = transform.apply(
+    pivotX, geometry.payloadY + geometry.payloadHeight);
+  int16_t centreX = (int16_t)roundf(payloadCentre.x);
+  int16_t payloadTop = (int16_t)roundf(payloadTopPoint.y);
+  int16_t bottomY = (int16_t)roundf(payloadBottomPoint.y);
   int16_t width = maxInt16(4, (int16_t)roundf(
     geometry.payloadWidth * (0.55f + game.reentryHeat * 0.38f)));
   int16_t length = maxInt16(8, (int16_t)roundf(
@@ -4181,6 +4318,12 @@ private:
   }
 
   void set(uint8_t red, uint8_t green, uint8_t blue) {
+    if (!onboardLedEnabled) {
+      red = 0;
+      green = 0;
+      blue = 0;
+    }
+
     uint32_t colour = pixel.Color(red, green, blue);
     if (colour == lastColour) {
       return;
