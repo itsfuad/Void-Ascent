@@ -219,6 +219,8 @@ static RandomGenerator randomGenerator;
 // Missions
 // =============================================================================
 
+enum class FlightType : uint8_t { TEST_FLIGHT, OUTER_SPACE };
+
 struct StageDefinition {
   const char *name;
 
@@ -241,6 +243,8 @@ struct MissionDefinition {
   uint16_t targetAltitude;
   bool recoverCapsule;
 
+  FlightType flightType;
+
   uint8_t stageCount;
   StageDefinition stages[4];
 };
@@ -254,6 +258,7 @@ static const MissionDefinition MISSIONS[] = {
      "RECOVER THE CAPSULE",
      450,
      true,
+     FlightType::TEST_FLIGHT,
      2,
      {{"BOOSTER", 31, 68, 7.40f, 7.00f, C_ORANGE},
       {"UPPER", 22, 50, 6.00f, 5.60f, C_CYAN},
@@ -266,6 +271,7 @@ static const MissionDefinition MISSIONS[] = {
      "PAYLOAD CONTINUES",
      535,
      false,
+     FlightType::OUTER_SPACE,
      2,
      {{"BOOSTER", 32, 70, 7.65f, 7.15f, C_ORANGE},
       {"UPPER", 23, 53, 6.25f, 5.75f, C_BLUE},
@@ -278,6 +284,7 @@ static const MissionDefinition MISSIONS[] = {
      "DEPLOY THE PROBE",
      920,
      false,
+     FlightType::OUTER_SPACE,
      3,
      {{"BOOSTER", 33, 66, 7.80f, 7.30f, C_ORANGE},
       {"CORE", 25, 50, 6.40f, 6.15f, C_BLUE},
@@ -290,6 +297,7 @@ static const MissionDefinition MISSIONS[] = {
      "RECOVER THE CAPSULE",
      1080,
      true,
+     FlightType::OUTER_SPACE,
      3,
      {{"BOOSTER", 34, 68, 8.00f, 7.45f, C_ORANGE},
       {"CORE", 26, 52, 6.55f, 6.30f, C_BLUE},
@@ -302,6 +310,7 @@ static const MissionDefinition MISSIONS[] = {
      "REACH DEEP SPACE",
      1540,
      false,
+     FlightType::OUTER_SPACE,
      4,
      {{"BOOSTER", 35, 58, 8.20f, 7.65f, C_ORANGE},
       {"CORE", 29, 46, 6.80f, 6.50f, C_BLUE},
@@ -1529,10 +1538,18 @@ static void drawMountains(float cameraAltitude) {
 // =============================================================================
 
 static void drawEarthOceanSphere(int16_t centreX, int16_t centreY,
-                                 int16_t radius, float surfaceVisibility) {
-  int16_t startY = centreY - radius;
+                                 int16_t radius, float surfaceVisibility,
+                                 float fillFraction) {
+  // Only render the top `fillFraction` of the sphere for the curvature effect
+  float clampedFill = clamp01(fillFraction);
+  if (clampedFill <= 0.01f) return;
 
-  int16_t endY = centreY + radius;
+  int16_t sphereTop = centreY - radius;
+  int16_t sphereBottom = centreY + radius;
+  int16_t filledBottom = sphereTop + (int16_t)((sphereBottom - sphereTop) * clampedFill);
+
+  int16_t startY = sphereTop;
+  int16_t endY = filledBottom;
 
   if (startY < 0) {
     startY = 0;
@@ -1601,7 +1618,9 @@ static void drawEarthOceanSphere(int16_t centreX, int16_t centreY,
 }
 
 static void drawEarthContinents(int16_t centreX, int16_t centreY,
-                                int16_t radius, float visibility) {
+                                int16_t radius, float visibility,
+                                float fillFraction) {
+  (void)fillFraction;
   if (visibility <= 0.01f) {
     return;
   }
@@ -1646,7 +1665,9 @@ static void drawEarthContinents(int16_t centreX, int16_t centreY,
 }
 
 static void drawEarthCloudBands(int16_t centreX, int16_t centreY,
-                                int16_t radius, float visibility) {
+                                int16_t radius, float visibility,
+                                float fillFraction) {
+  (void)fillFraction;
   if (visibility <= 0.05f) {
     return;
   }
@@ -1691,75 +1712,64 @@ static void drawEarthCloudBands(int16_t centreX, int16_t centreY,
   }
 }
 
-static void drawEarth(float altitude) {
-  // Earth starts as a faint atmospheric glow and slowly rises.
-  float reveal = smoothStep(105.0f, 720.0f, altitude);
+static void drawEarth(float altitude, FlightType flightType) {
+  // Gradual earth curvature: horizon starts bending, then sphere emerges.
+  float revealStart = 130.0f;
+  float revealEnd = (flightType == FlightType::TEST_FLIGHT) ? 420.0f : 780.0f;
+  float maxReveal = (flightType == FlightType::TEST_FLIGHT) ? 0.28f : 1.0f;
 
-  if (reveal <= 0.001f) {
-    return;
-  }
+  float reveal = smoothStep(revealStart, revealEnd, altitude);
+  if (reveal <= 0.001f) return;
+
+  reveal *= maxReveal;
 
   static constexpr int16_t EARTH_RADIUS = 188;
 
-  int16_t centreY = (int16_t)roundf(536.0f - reveal * 270.0f);
-
+  // Centre rises from far below as reveal increases
+  int16_t centreY = (int16_t)roundf(620.0f - reveal * 380.0f);
   int16_t earthTop = centreY - EARTH_RADIUS;
-
-  if (earthTop > SCREEN_H + 10) {
-    return;
-  }
+  if (earthTop > SCREEN_H + 10) return;
 
   int16_t sampledY = earthTop;
-
-  if (sampledY < 0) {
-    sampledY = 0;
-  }
-
-  if (sampledY >= SCREEN_H) {
-    sampledY = SCREEN_H - 1;
-  }
+  if (sampledY < 0) sampledY = 0;
+  if (sampledY >= SCREEN_H) sampledY = SCREEN_H - 1;
 
   uint16_t background = skyColourAtY(altitude, sampledY);
 
-  float glowVisibility = smoothStep(0.0f, 0.34f, reveal);
-
-  uint16_t outerGlow =
-      blend565(background, C_ATMOSPHERE, (uint8_t)(glowVisibility * 165.0f));
-
+  // Glow appears early and fades as surface becomes visible
+  float glowVisibility = smoothStep(0.0f, 0.25f, reveal);
+  uint16_t outerGlow = blend565(background, C_ATMOSPHERE, (uint8_t)(glowVisibility * 165.0f));
   frame.drawCircle(SCREEN_W / 2, centreY, EARTH_RADIUS + 7, outerGlow);
-
   frame.drawCircle(SCREEN_W / 2, centreY, EARTH_RADIUS + 6, outerGlow);
-
   frame.drawCircle(SCREEN_W / 2, centreY, EARTH_RADIUS + 5, outerGlow);
-
   frame.drawCircle(SCREEN_W / 2, centreY, EARTH_RADIUS + 4, outerGlow);
 
-  float surfaceVisibility = smoothStep(0.07f, 0.48f, reveal);
+  // Fill fraction: controls how much of the sphere (from top) is drawn
+  // At low reveal, only the very top arc is visible = curved horizon
+  float fillFraction = smoothStep(0.0f, 1.0f, reveal * 2.0f);
+  fillFraction = clamp01(fillFraction);
 
-  drawEarthOceanSphere(SCREEN_W / 2, centreY, EARTH_RADIUS, surfaceVisibility);
+  float surfaceVisibility = smoothStep(0.05f, 0.35f, reveal);
+  drawEarthOceanSphere(SCREEN_W / 2, centreY, EARTH_RADIUS, surfaceVisibility, fillFraction);
 
-  float continentVisibility = smoothStep(0.25f, 0.80f, reveal);
+  float continentVisibility = smoothStep(0.20f, 0.65f, reveal);
+  drawEarthContinents(SCREEN_W / 2, centreY, EARTH_RADIUS, continentVisibility, fillFraction);
 
-  drawEarthContinents(SCREEN_W / 2, centreY, EARTH_RADIUS, continentVisibility);
-
-  float cloudVisibility = smoothStep(0.32f, 0.90f, reveal);
-
-  drawEarthCloudBands(SCREEN_W / 2, centreY, EARTH_RADIUS, cloudVisibility);
+  float cloudVisibility = smoothStep(0.28f, 0.75f, reveal);
+  drawEarthCloudBands(SCREEN_W / 2, centreY, EARTH_RADIUS, cloudVisibility, fillFraction);
 
   // Bright limb.
-  uint16_t limbColour =
-      blend565(C_OCEAN_LIGHT, C_WHITE, (uint8_t)(glowVisibility * 150.0f));
-
+  uint16_t limbColour = blend565(C_OCEAN_LIGHT, C_WHITE, (uint8_t)(glowVisibility * 150.0f));
   frame.drawCircle(SCREEN_W / 2, centreY, EARTH_RADIUS, limbColour);
 }
 
-static void drawBackground(float visualAltitude, uint32_t now) {
+static void drawBackground(float visualAltitude, uint32_t now, FlightType flightType) {
   drawSkyGradient(visualAltitude);
   drawStars(visualAltitude);
   drawSun(visualAltitude);
   drawMountains(visualAltitude);
   drawClouds(visualAltitude, now);
-  drawEarth(visualAltitude);
+  drawEarth(visualAltitude, flightType);
 }
 
 // =============================================================================
@@ -2310,6 +2320,17 @@ static void separateCurrentStage() {
   game.activeStage++;
   game.stageElapsed = 0.0f;
 
+  // Re-center the remaining rocket on screen
+  if (game.activeStage < currentMission().stageCount) {
+    float remainingHeight = remainingRocketHeight(currentMission(), game.activeStage);
+    float oldCompleteHeight = remainingRocketHeight(currentMission(), game.activeStage - 1);
+    float heightDiff = oldCompleteHeight - remainingHeight;
+    game.launchNoseY += heightDiff;
+    if (game.trackingNoseY < 170.0f) {
+      game.trackingNoseY += heightDiff;
+    }
+  }
+
   if (game.activeStage >= currentMission().stageCount) {
     game.phase = FlightPhase::COASTING;
 
@@ -2532,6 +2553,7 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
       game.velocity = 1.35f;
 
       setFeedback("LIFTOFF", C_YELLOW, 1.0f);
+      game.shake = 5.0f;
 
       spawnSmokeBurst(86.0f, 267.0f, 34, 43.0f);
 
@@ -2662,6 +2684,12 @@ static void updateScreenInput() {
   }
 
   if (game.screen == ScreenMode::BRIEFING) {
+    if (button.events.held) {
+      game.selectedMission = (game.selectedMission + 1) % game.unlockedMissions;
+
+      game.screenStartedAt = millis();
+    }
+
     if (button.events.tapped) {
       startMission();
     }
@@ -2772,7 +2800,7 @@ static void drawShockwave() {
 // =============================================================================
 
 static void drawRecoveryScreen(uint32_t now) {
-  drawBackground(85.0f, now);
+  drawBackground(85.0f, now, currentMission().flightType);
 
   float y = game.recoveryY;
 
@@ -2814,7 +2842,7 @@ static void drawRecoveryScreen(uint32_t now) {
 }
 
 static void drawDeploymentScreen(uint32_t now) {
-  drawBackground(maxFloat(game.cameraAltitude, 680.0f), now);
+  drawBackground(maxFloat(game.cameraAltitude, 680.0f), now, currentMission().flightType);
 
   int16_t payloadY = (int16_t)game.deploymentY;
 
@@ -2856,7 +2884,7 @@ static void drawFlightScreen(uint32_t now) {
     return;
   }
 
-  drawBackground(game.cameraAltitude, now);
+  drawBackground(game.cameraAltitude, now, currentMission().flightType);
 
   drawLaunchPad(game.cameraAltitude, now, game.phase == FlightPhase::COUNTDOWN);
 
@@ -2931,7 +2959,7 @@ static void drawSplashSmoke(uint32_t elapsed) {
 static void drawSplashScreen(uint32_t now) {
   uint32_t elapsed = now - game.screenStartedAt;
 
-  drawBackground(0.0f, now);
+  drawBackground(0.0f, now, MISSIONS[game.selectedMission].flightType);
 
   drawLaunchPad(0.0f, now, elapsed > 650);
 
@@ -2977,7 +3005,7 @@ static void drawSplashScreen(uint32_t now) {
 // =============================================================================
 
 static void drawBriefingScreen(uint32_t now) {
-  drawBackground(0.0f, now);
+  drawBackground(0.0f, now, currentMission().flightType);
 
   drawLaunchPad(0.0f, now, false);
 
@@ -3047,7 +3075,7 @@ static void drawBriefingScreen(uint32_t now) {
 // =============================================================================
 
 static void drawResultScreen(uint32_t now) {
-  drawBackground(game.maximumAltitude, now);
+  drawBackground(game.maximumAltitude, now, currentMission().flightType);
 
   frame.fillRoundRect(10, 28, 152, 225, 10, C_PANEL);
 
