@@ -519,6 +519,9 @@ struct GameState {
   float launchNoseY = 0.0f;
   float trackingNoseY = 0.0f;
 
+  float centeringOffset = 0.0f;
+  float centeringTarget = 0.0f;
+
   float cameraAltitude = 0.0f;
   float previousCameraAltitude = 0.0f;
 
@@ -2320,15 +2323,11 @@ static void separateCurrentStage() {
   game.activeStage++;
   game.stageElapsed = 0.0f;
 
-  // Re-center the remaining rocket on screen
+  // Smoothly re-center the remaining rocket on screen
   if (game.activeStage < currentMission().stageCount) {
     float remainingHeight = remainingRocketHeight(currentMission(), game.activeStage);
     float oldCompleteHeight = remainingRocketHeight(currentMission(), game.activeStage - 1);
-    float heightDiff = oldCompleteHeight - remainingHeight;
-    game.launchNoseY += heightDiff;
-    if (game.trackingNoseY < 170.0f) {
-      game.trackingNoseY += heightDiff;
-    }
+    game.centeringTarget += oldCompleteHeight - remainingHeight;
   }
 
   if (game.activeStage >= currentMission().stageCount) {
@@ -2386,6 +2385,9 @@ static void resetFlightObjects() {
 
   game.cameraAltitude = 0.0f;
   game.previousCameraAltitude = 0.0f;
+
+  game.centeringOffset = 0.0f;
+  game.centeringTarget = 0.0f;
 
   game.activeStage = 0;
 
@@ -2540,6 +2542,25 @@ static void failByTrajectory() {
   setPhase(FlightPhase::DESCENDING);
 }
 
+static void updateCentering(float deltaSeconds) {
+  if (game.centeringOffset >= game.centeringTarget) {
+    return;
+  }
+
+  float centeringSpeed = 12.0f;
+  float followAmount = 1.0f - expf(-centeringSpeed * deltaSeconds);
+  float newOffset = lerpFloat(game.centeringOffset, game.centeringTarget, followAmount);
+
+  float delta = newOffset - game.centeringOffset;
+  game.centeringOffset = newOffset;
+
+  game.launchNoseY += delta;
+  game.trackingNoseY += delta;
+  if (game.trackingNoseY > 170.0f) {
+    game.trackingNoseY = 170.0f;
+  }
+}
+
 static void updateFlight(float deltaSeconds, uint32_t now) {
   float phaseSeconds = (now - game.phaseStartedAt) / 1000.0f;
 
@@ -2646,6 +2667,8 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
       setScreen(ScreenMode::RESULT);
     }
   }
+
+  updateCentering(deltaSeconds);
 
   updateWorldCamera(deltaSeconds);
 
