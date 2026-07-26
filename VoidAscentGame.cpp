@@ -1,4 +1,6 @@
-#include "VoidAscentGame.h"
+// =============================================================================
+// System imports
+// =============================================================================
 
 #include <Adafruit_GFX.h>
 #include <Adafruit_NeoPixel.h>
@@ -13,6 +15,12 @@
 #if __has_include(<esp_arduino_version.h>)
 #include <esp_arduino_version.h>
 #endif
+
+// =============================================================================
+// Self files
+// =============================================================================
+
+#include "VoidAscentGame.h"
 
 // Arduino defines FALLING as an interrupt-mode macro.
 #ifdef FALLING
@@ -242,6 +250,8 @@ static RandomGenerator randomGenerator;
 
 enum class FlightType : uint8_t { TEST_FLIGHT, OUTER_SPACE };
 
+static constexpr uint8_t MAX_STAGE_COUNT = 4;
+
 struct StageDefinition {
   const char *name;
 
@@ -265,12 +275,19 @@ struct MissionDefinition {
 
   FlightType flightType;
 
-  uint8_t stageCount;
-  StageDefinition stages[4];
+  StageDefinition stages[MAX_STAGE_COUNT];
+
+  uint8_t stageCount() const {
+    uint8_t count = 0;
+    while (count < MAX_STAGE_COUNT && stages[count].name != nullptr) {
+      count++;
+    }
+    return count;
+  }
 };
 
-// More stages mean shorter individual burn windows. Higher-stage missions
-// therefore demand more frequent, more accurate separation timing.
+// Unused array entries are zero-initialized, so a mission only lists its real
+// stages. More than MAX_STAGE_COUNT stages is a compile error.
 static const MissionDefinition MISSIONS[] = {
     {"T-01",
      "TEST FLIGHT",
@@ -279,11 +296,8 @@ static const MissionDefinition MISSIONS[] = {
      420,
      true,
      FlightType::TEST_FLIGHT,
-     2,
      {{"BOOSTER", 31, 68, 7.00f, C_ORANGE},
-      {"UPPER", 22, 50, 5.70f, C_CYAN},
-      {},
-      {}}},
+      {"UPPER", 22, 50, 5.70f, C_CYAN}}},
 
     {"K-100",
      "KARMAN RUN",
@@ -292,11 +306,8 @@ static const MissionDefinition MISSIONS[] = {
      480,
      false,
      FlightType::OUTER_SPACE,
-     2,
      {{"BOOSTER", 32, 70, 7.40f, C_ORANGE},
-      {"UPPER", 23, 53, 6.10f, C_BLUE},
-      {},
-      {}}},
+      {"UPPER", 23, 53, 6.10f, C_BLUE}}},
 
     {"P-180",
      "ORBITAL PROBE",
@@ -305,11 +316,9 @@ static const MissionDefinition MISSIONS[] = {
      700,
      false,
      FlightType::OUTER_SPACE,
-     3,
      {{"BOOSTER", 33, 66, 8.20f, C_ORANGE},
       {"CORE", 25, 50, 7.10f, C_BLUE},
-      {"UPPER", 18, 38, 6.10f, C_PURPLE},
-      {}}},
+      {"UPPER", 18, 38, 6.10f, C_PURPLE}}},
 
     {"C-220",
      "CREW QUAL",
@@ -318,11 +327,9 @@ static const MissionDefinition MISSIONS[] = {
      800,
      true,
      FlightType::OUTER_SPACE,
-     3,
      {{"BOOSTER", 34, 68, 8.50f, C_ORANGE},
       {"CORE", 26, 52, 7.30f, C_BLUE},
-      {"UPPER", 19, 39, 6.20f, C_GREEN},
-      {}}},
+      {"UPPER", 19, 39, 6.20f, C_GREEN}}},
 
     {"H-340",
      "HEAVY ASCENT",
@@ -331,7 +338,6 @@ static const MissionDefinition MISSIONS[] = {
      1050,
      false,
      FlightType::OUTER_SPACE,
-     4,
      {{"BOOSTER", 35, 58, 9.40f, C_ORANGE},
       {"CORE", 29, 46, 8.10f, C_BLUE},
       {"UPPER", 23, 36, 7.00f, C_GREEN},
@@ -345,17 +351,18 @@ public:
   float totalPoweredSeconds(const MissionDefinition &mission) const {
     // Two-, three- and four-stage stacks stay within a 12 percent total burn
     // range while giving higher-stage missions shorter individual windows.
-    return 12.40f + maxFloat(0.0f, mission.stageCount - 2.0f) * 0.75f;
+    return 12.40f + maxFloat(0.0f, mission.stageCount() - 2.0f) * 0.75f;
   }
 
   float stageBurnSeconds(const MissionDefinition &mission,
                          uint8_t stageIndex) const {
-    if (stageIndex >= mission.stageCount) {
+    uint8_t stageCount = mission.stageCount();
+    if (stageIndex >= stageCount) {
       return 0.0f;
     }
 
     float totalHeight = 0.0f;
-    for (uint8_t index = 0; index < mission.stageCount; index++) {
+    for (uint8_t index = 0; index < stageCount; index++) {
       totalHeight += mission.stages[index].height;
     }
 
@@ -583,7 +590,7 @@ struct RocketGeometry : public SceneObject {
   float payloadHeight = 0.0f;
 
   uint8_t stageCount = 0;
-  StageGeometry stages[4];
+  StageGeometry stages[MAX_STAGE_COUNT];
 };
 
 class LaunchPadObject : public SceneObject {
@@ -1441,7 +1448,7 @@ static float currentRocketVisualScale() {
 static const StageDefinition *currentStage() {
   const MissionDefinition &mission = currentMission();
 
-  if (game.activeStage >= mission.stageCount) {
+  if (game.activeStage >= mission.stageCount()) {
     return nullptr;
   }
 
@@ -1458,7 +1465,7 @@ static float remainingRocketHeight(const MissionDefinition &mission,
 
   bool first = true;
 
-  for (int8_t index = (int8_t)mission.stageCount - 1;
+  for (int8_t index = (int8_t)mission.stageCount() - 1;
        index >= (int8_t)activeStage; index--) {
     if (!first) {
       height += 2.0f;
@@ -1491,9 +1498,10 @@ static void buildRocketGeometryFor(const MissionDefinition &mission,
 
   geometry.stageCount = 0;
 
-  for (int8_t index = (int8_t)mission.stageCount - 1;
+  uint8_t stageCount = mission.stageCount();
+  for (int8_t index = (int8_t)stageCount - 1;
        index >= (int8_t)activeStage; index--) {
-    if (geometry.stageCount >= 4) {
+    if (geometry.stageCount >= MAX_STAGE_COUNT) {
       break;
     }
 
@@ -3150,7 +3158,7 @@ static void separateCurrentStage() {
       remainingRocketHeight(currentMission(), game.activeStage - 1);
   game.centeringTarget += (previousHeight - remainingHeight) * 0.5f;
 
-  if (game.activeStage >= currentMission().stageCount) {
+  if (game.activeStage >= currentMission().stageCount()) {
     game.phase = FlightPhase::COASTING;
     game.phaseStartedAt = millis();
   } else {
@@ -3700,7 +3708,7 @@ static void drawHud() {
 
   if (game.phase == FlightPhase::BURNING) {
     snprintf(buffer, sizeof(buffer), "STAGE %u/%u", game.activeStage + 1,
-             currentMission().stageCount);
+             currentMission().stageCount());
 
     drawTextCentered(buffer, 35, 1, C_MUTED);
   } else if (game.phase == FlightPhase::COASTING) {
@@ -4064,7 +4072,7 @@ static void drawBriefingScreen(uint32_t now) {
   char stagesText[24];
 
   snprintf(stagesText, sizeof(stagesText), "%u STAGE STACK",
-           mission.stageCount);
+           mission.stageCount());
 
   drawTextCentered(stagesText, 70, 1, C_CYAN);
 
