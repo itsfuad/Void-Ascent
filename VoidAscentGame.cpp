@@ -292,70 +292,64 @@ struct MissionDefinition {
   }
 };
 
-// Unused array entries are zero-initialized, so a mission only lists its real
-// stages. More than MAX_STAGE_COUNT stages is a compile error.
-static constexpr MissionDefinition MISSIONS[] = {
-    {"T-01",
-     "TEST FLIGHT",
-     "VALIDATE THE STACK",
-     "RECOVER THE CAPSULE",
-     420,
-     true,
-     FlightType::TEST_FLIGHT,
-     {{"BOOSTER", 31, 68, 7.00f, C_ORANGE},
-      {"UPPER", 22, 50, 5.70f, C_CYAN}}},
-
-    {"K-100",
-     "KARMAN RUN",
-     "CROSS OUTER SPACE",
-     "PAYLOAD CONTINUES",
-     480,
-     false,
-     FlightType::OUTER_SPACE,
-     {{"BOOSTER", 32, 70, 7.40f, C_ORANGE},
-      {"UPPER", 23, 53, 6.10f, C_BLUE}}},
-
-    {"P-180",
-     "ORBITAL PROBE",
-     "REACH HIGH SPACE",
-     "DEPLOY THE PROBE",
-     700,
-     false,
-     FlightType::OUTER_SPACE,
-     {{"BOOSTER", 33, 66, 8.20f, C_ORANGE},
-      {"CORE", 25, 50, 7.10f, C_BLUE},
-      {"UPPER", 18, 38, 6.10f, C_PURPLE}}},
-
-    {"C-220",
-     "CREW QUAL",
-     "COMPLETE CREW ASCENT",
-     "RECOVER THE CAPSULE",
-     800,
-     true,
-     FlightType::OUTER_SPACE,
-     {{"BOOSTER", 34, 68, 8.50f, C_ORANGE},
-      {"CORE", 26, 52, 7.30f, C_BLUE},
-      {"UPPER", 19, 39, 6.20f, C_GREEN}}},
-
-    {"H-340",
-     "HEAVY ASCENT",
-     "FOUR-STAGE FLIGHT",
-     "REACH DEEP SPACE",
-     1050,
-     false,
-     FlightType::OUTER_SPACE,
-     {{"BOOSTER", 35, 58, 9.40f, C_ORANGE},
-      {"CORE", 29, 46, 8.10f, C_BLUE},
-      {"UPPER", 23, 36, 7.00f, C_GREEN},
-      {"KICK", 17, 28, 6.10f, C_PURPLE}}},
-};
-
-static constexpr uint8_t MISSION_COUNT = sizeof(MISSIONS) / sizeof(MISSIONS[0]);
-
 #include "MissionValidation.h"
 
-static_assert(missionValidationAllTargetsReachable(MISSIONS),
-              "a mission target exceeds its ideal-flight apogee");
+// CREATE_MISSION keeps the table readable while giving each entry a
+// code-specific compile-time reachability check. STAGE keeps each stage's
+// commas inside one macro argument.
+#define STAGE(name, width, height, thrust, bandColour) \
+  StageDefinition{name, width, height, thrust, bandColour}
+#define CREATE_MISSION(code, name, objective1, objective2, target, recover, \
+                       flightType, ...)                                     \
+  []() constexpr {                                                           \
+    constexpr MissionDefinition mission = {                                  \
+        code, name, objective1, objective2, target, recover, flightType,    \
+        {__VA_ARGS__}};                                                       \
+    static_assert(missionValidationCanReachTarget(mission),                  \
+                  code " target altitude exceeds its ideal-flight apogee"); \
+    return mission;                                                           \
+  }()
+
+static constexpr MissionDefinition MISSIONS[] = {
+    CREATE_MISSION(
+        "T-01", "TEST FLIGHT", "VALIDATE THE STACK", "RECOVER THE CAPSULE",
+        420, true, FlightType::TEST_FLIGHT,
+        STAGE("BOOSTER", 31, 68, 7.00f, C_ORANGE),
+        STAGE("UPPER", 22, 50, 5.70f, C_CYAN)),
+
+    CREATE_MISSION(
+        "K-100", "KARMAN RUN", "CROSS OUTER SPACE", "PAYLOAD CONTINUES",
+        480, false, FlightType::OUTER_SPACE,
+        STAGE("BOOSTER", 32, 70, 7.40f, C_ORANGE),
+        STAGE("UPPER", 23, 53, 6.10f, C_BLUE)),
+
+    CREATE_MISSION(
+        "P-180", "ORBITAL PROBE", "REACH HIGH SPACE", "DEPLOY THE PROBE",
+        700, false, FlightType::OUTER_SPACE,
+        STAGE("BOOSTER", 33, 66, 8.20f, C_ORANGE),
+        STAGE("CORE", 25, 50, 7.10f, C_BLUE),
+        STAGE("UPPER", 18, 38, 6.10f, C_PURPLE)),
+
+    CREATE_MISSION(
+        "C-220", "CREW QUAL", "COMPLETE CREW ASCENT", "RECOVER THE CAPSULE",
+        800, true, FlightType::OUTER_SPACE,
+        STAGE("BOOSTER", 34, 68, 8.50f, C_ORANGE),
+        STAGE("CORE", 26, 52, 7.30f, C_BLUE),
+        STAGE("UPPER", 19, 39, 6.20f, C_GREEN)),
+
+    CREATE_MISSION(
+        "H-340", "HEAVY ASCENT", "FOUR-STAGE FLIGHT", "REACH DEEP SPACE",
+        1050, false, FlightType::OUTER_SPACE,
+        STAGE("BOOSTER", 35, 58, 9.40f, C_ORANGE),
+        STAGE("CORE", 29, 46, 8.10f, C_BLUE),
+        STAGE("UPPER", 23, 36, 7.00f, C_GREEN),
+        STAGE("KICK", 17, 28, 6.10f, C_PURPLE)),
+};
+
+#undef CREATE_MISSION
+#undef STAGE
+
+static constexpr uint8_t MISSION_COUNT = sizeof(MISSIONS) / sizeof(MISSIONS[0]);
 
 class FlightTimingModel {
 public:
