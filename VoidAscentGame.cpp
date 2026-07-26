@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>
 #include <Preferences.h>
+#include <cstdint>
 #include <esp_system.h>
 #include <math.h>
 #include <string.h>
@@ -39,7 +40,7 @@ static constexpr int16_t LCD_NATIVE_W = 172;
 static constexpr int16_t LCD_NATIVE_H = 320;
 
 // User-facing display brightness percentage. Keep this in the 0-100 range.
-static uint8_t displayBrightness = 50;  // 0-100 percent
+static uint8_t displayBrightness = 80; // 0-100 percent
 // Runtime switch for all onboard RGB status indication.
 static bool onboardLedEnabled = true;
 static constexpr uint8_t BACKLIGHT_CHANNEL = 0;
@@ -48,7 +49,7 @@ static constexpr uint8_t BACKLIGHT_CHANNEL = 0;
 #define LCD_SPI_HZ 40000000UL
 
 Arduino_DataBus *lcdBus = new Arduino_ESP32SPI(
-  PIN_LCD_DC, PIN_LCD_CS, PIN_LCD_SCLK, PIN_LCD_MOSI, GFX_NOT_DEFINED);
+    PIN_LCD_DC, PIN_LCD_CS, PIN_LCD_SCLK, PIN_LCD_MOSI, GFX_NOT_DEFINED);
 
 Arduino_GFX *gfx = new Arduino_ST7789(lcdBus, PIN_LCD_RST, LCD_ROTATION, true,
                                       LCD_NATIVE_W, LCD_NATIVE_H, 34, 0, 34, 0);
@@ -93,7 +94,8 @@ static constexpr float ROCKET_BODY_TRACKING_CENTRE_Y = 140.0f;
 // =============================================================================
 
 static constexpr uint16_t C565(uint8_t red, uint8_t green, uint8_t blue) {
-  return ((uint16_t)(red & 0xF8) << 8) | ((uint16_t)(green & 0xFC) << 3) | ((uint16_t)blue >> 3);
+  return ((uint16_t)(red & 0xF8) << 8) | ((uint16_t)(green & 0xFC) << 3) |
+         ((uint16_t)blue >> 3);
 }
 
 static constexpr uint16_t C_BLACK = C565(2, 4, 8);
@@ -160,9 +162,7 @@ static float clampFloat(float value, float minimum, float maximum) {
   return value;
 }
 
-static float clamp01(float value) {
-  return clampFloat(value, 0.0f, 1.0f);
-}
+static float clamp01(float value) { return clampFloat(value, 0.0f, 1.0f); }
 
 static float minFloat(float first, float second) {
   return first < second ? first : second;
@@ -231,9 +231,7 @@ struct RandomGenerator {
     return minimum + (int)(next() % (uint32_t)(maximum - minimum + 1));
   }
 
-  bool chance(float probability) {
-    return range(0.0f, 1.0f) < probability;
-  }
+  bool chance(float probability) { return range(0.0f, 1.0f) < probability; }
 };
 
 static RandomGenerator randomGenerator;
@@ -242,8 +240,7 @@ static RandomGenerator randomGenerator;
 // Missions
 // =============================================================================
 
-enum class FlightType : uint8_t { TEST_FLIGHT,
-                                  OUTER_SPACE };
+enum class FlightType : uint8_t { TEST_FLIGHT, OUTER_SPACE };
 
 struct StageDefinition {
   const char *name;
@@ -275,70 +272,70 @@ struct MissionDefinition {
 // More stages mean shorter individual burn windows. Higher-stage missions
 // therefore demand more frequent, more accurate separation timing.
 static const MissionDefinition MISSIONS[] = {
-  { "T-01",
-    "TEST FLIGHT",
-    "VALIDATE THE STACK",
-    "RECOVER THE CAPSULE",
-    420,
-    true,
-    FlightType::TEST_FLIGHT,
-    2,
-    { { "BOOSTER", 31, 68, 7.00f, C_ORANGE },
-      { "UPPER", 22, 50, 5.70f, C_CYAN },
+    {"T-01",
+     "TEST FLIGHT",
+     "VALIDATE THE STACK",
+     "RECOVER THE CAPSULE",
+     420,
+     true,
+     FlightType::TEST_FLIGHT,
+     2,
+     {{"BOOSTER", 31, 68, 7.00f, C_ORANGE},
+      {"UPPER", 22, 50, 5.70f, C_CYAN},
       {},
-      {} } },
+      {}}},
 
-  { "K-100",
-    "KARMAN RUN",
-    "CROSS OUTER SPACE",
-    "PAYLOAD CONTINUES",
-    480,
-    false,
-    FlightType::OUTER_SPACE,
-    2,
-    { { "BOOSTER", 32, 70, 7.40f, C_ORANGE },
-      { "UPPER", 23, 53, 6.10f, C_BLUE },
+    {"K-100",
+     "KARMAN RUN",
+     "CROSS OUTER SPACE",
+     "PAYLOAD CONTINUES",
+     480,
+     false,
+     FlightType::OUTER_SPACE,
+     2,
+     {{"BOOSTER", 32, 70, 7.40f, C_ORANGE},
+      {"UPPER", 23, 53, 6.10f, C_BLUE},
       {},
-      {} } },
+      {}}},
 
-  { "P-180",
-    "ORBITAL PROBE",
-    "REACH HIGH SPACE",
-    "DEPLOY THE PROBE",
-    700,
-    false,
-    FlightType::OUTER_SPACE,
-    3,
-    { { "BOOSTER", 33, 66, 8.20f, C_ORANGE },
-      { "CORE", 25, 50, 7.10f, C_BLUE },
-      { "UPPER", 18, 38, 6.10f, C_PURPLE },
-      {} } },
+    {"P-180",
+     "ORBITAL PROBE",
+     "REACH HIGH SPACE",
+     "DEPLOY THE PROBE",
+     700,
+     false,
+     FlightType::OUTER_SPACE,
+     3,
+     {{"BOOSTER", 33, 66, 8.20f, C_ORANGE},
+      {"CORE", 25, 50, 7.10f, C_BLUE},
+      {"UPPER", 18, 38, 6.10f, C_PURPLE},
+      {}}},
 
-  { "C-220",
-    "CREW QUAL",
-    "COMPLETE CREW ASCENT",
-    "RECOVER THE CAPSULE",
-    800,
-    true,
-    FlightType::OUTER_SPACE,
-    3,
-    { { "BOOSTER", 34, 68, 8.50f, C_ORANGE },
-      { "CORE", 26, 52, 7.30f, C_BLUE },
-      { "UPPER", 19, 39, 6.20f, C_GREEN },
-      {} } },
+    {"C-220",
+     "CREW QUAL",
+     "COMPLETE CREW ASCENT",
+     "RECOVER THE CAPSULE",
+     800,
+     true,
+     FlightType::OUTER_SPACE,
+     3,
+     {{"BOOSTER", 34, 68, 8.50f, C_ORANGE},
+      {"CORE", 26, 52, 7.30f, C_BLUE},
+      {"UPPER", 19, 39, 6.20f, C_GREEN},
+      {}}},
 
-  { "H-340",
-    "HEAVY ASCENT",
-    "FOUR-STAGE FLIGHT",
-    "REACH DEEP SPACE",
-    1050,
-    false,
-    FlightType::OUTER_SPACE,
-    4,
-    { { "BOOSTER", 35, 58, 9.40f, C_ORANGE },
-      { "CORE", 29, 46, 8.10f, C_BLUE },
-      { "UPPER", 23, 36, 7.00f, C_GREEN },
-      { "KICK", 17, 28, 6.10f, C_PURPLE } } }
+    {"H-340",
+     "HEAVY ASCENT",
+     "FOUR-STAGE FLIGHT",
+     "REACH DEEP SPACE",
+     1050,
+     false,
+     FlightType::OUTER_SPACE,
+     4,
+     {{"BOOSTER", 35, 58, 9.40f, C_ORANGE},
+      {"CORE", 29, 46, 8.10f, C_BLUE},
+      {"UPPER", 23, 36, 7.00f, C_GREEN},
+      {"KICK", 17, 28, 6.10f, C_PURPLE}}},
 };
 
 static constexpr uint8_t MISSION_COUNT = sizeof(MISSIONS) / sizeof(MISSIONS[0]);
@@ -368,8 +365,8 @@ public:
 
   float lateGraceSeconds(const MissionDefinition &mission,
                          uint8_t stageIndex) const {
-    return clampFloat(stageBurnSeconds(mission, stageIndex) * 0.16f,
-                      0.45f, 0.85f);
+    return clampFloat(stageBurnSeconds(mission, stageIndex) * 0.16f, 0.45f,
+                      0.85f);
   }
 };
 
@@ -379,10 +376,7 @@ static const FlightTimingModel flightTiming;
 // Runtime types
 // =============================================================================
 
-enum class ScreenMode : uint8_t { SPLASH,
-                                  BRIEFING,
-                                  FLIGHT,
-                                  RESULT };
+enum class ScreenMode : uint8_t { SPLASH, BRIEFING, FLIGHT, RESULT };
 
 enum class FlightPhase : uint8_t {
   COUNTDOWN,
@@ -396,9 +390,7 @@ enum class FlightPhase : uint8_t {
   RECOVERY
 };
 
-enum class ParticleType : uint8_t { SMOKE,
-                                    FIRE,
-                                    SPARK };
+enum class ParticleType : uint8_t { SMOKE, FIRE, SPARK };
 
 enum class FragmentType : uint8_t {
   WHOLE_STAGE,
@@ -415,8 +407,7 @@ struct BoundingBox {
   float bottom = 0.0f;
 
   bool intersectsScreen() const {
-    return right >= 0.0f && left < SCREEN_W &&
-           bottom >= 0.0f && top < SCREEN_H;
+    return right >= 0.0f && left < SCREEN_W && bottom >= 0.0f && top < SCREEN_H;
   }
 };
 
@@ -427,9 +418,7 @@ class SceneObject {
 public:
   BoundingBox bounds;
 
-  bool isVisibleOnScreen() const {
-    return bounds.intersectsScreen();
-  }
+  bool isVisibleOnScreen() const { return bounds.intersectsScreen(); }
 
   void setBoundingBox(float left, float top, float right, float bottom) {
     bounds.left = left;
@@ -603,13 +592,10 @@ public:
     baseY = 274.0f + cameraAltitude * WORLD_PIXELS_PER_ALTITUDE;
 
     // Includes the upper warning light and the complete ground fill.
-    setBoundingBox(0.0f, baseY - 170.0f,
-                   SCREEN_W - 1.0f, baseY + 113.0f);
+    setBoundingBox(0.0f, baseY - 170.0f, SCREEN_W - 1.0f, baseY + 113.0f);
   }
 
-  float y() const {
-    return baseY;
-  }
+  float y() const { return baseY; }
 
 private:
   float baseY = 274.0f;
@@ -703,26 +689,24 @@ public:
     float distance = 1.0f + altitude / 18.0f;
 
     SceneProjection projection;
-    projection.earthRadius = 42.0f +
-      (6000.0f - 42.0f) / powf(distance, 1.55f);
+    projection.earthRadius = 42.0f + (6000.0f - 42.0f) / powf(distance, 1.55f);
 
-    float surfaceY = lerpFloat(284.0f, 292.0f,
-                               smoothStep(0.0f, 115.0f, altitude));
+    float surfaceY =
+        lerpFloat(284.0f, 292.0f, smoothStep(0.0f, 115.0f, altitude));
     float curvatureLift = 32.0f * smoothStep(150.0f, 340.0f, altitude);
-    projection.earthCentreY = surfaceY + projection.earthRadius -
-                              curvatureLift;
+    projection.earthCentreY = surfaceY + projection.earthRadius - curvatureLift;
 
-    projection.rocketScale = lerpFloat(
-      1.0f, 0.75f, smoothStep(145.0f, 340.0f, altitude));
+    projection.rocketScale =
+        lerpFloat(1.0f, 0.75f, smoothStep(145.0f, 340.0f, altitude));
 
     // A quadratic downrange path starts nearly vertical, then becomes visibly
     // lateral as the gravity turn develops. It is altitude-driven, so coasting
     // or waiting on an empty stage cannot advance it independently.
     float pathAmount = clamp01((altitude - 15.0f) / 325.0f);
-    projection.rocketCentreX = SCREEN_W * 0.5f +
-                               42.0f * pathAmount * pathAmount;
+    projection.rocketCentreX =
+        SCREEN_W * 0.5f + 42.0f * pathAmount * pathAmount;
     projection.rocketPitchRadians =
-      0.175f * smoothStep(32.0f, 205.0f, altitude);
+        0.175f * smoothStep(32.0f, 205.0f, altitude);
     return projection;
   }
 };
@@ -780,15 +764,15 @@ static void fillTranslucentRoundRect(int16_t x, int16_t y, int16_t width,
     if (edgeDistance < radius) {
       float circleY = radius - edgeDistance;
       inset = radius - (int16_t)floorf(sqrtf(maxFloat(
-        0.0f, radius * radius - circleY * circleY)));
+                           0.0f, radius * radius - circleY * circleY)));
     }
 
     for (int16_t column = inset; column < width - inset; column++) {
       int16_t pixelX = x + column;
       int16_t pixelY = y + row;
-      frame.drawPixel(pixelX, pixelY,
-                      blend565(frame.getPixel(pixelX, pixelY),
-                               colour, opacity));
+      frame.drawPixel(
+          pixelX, pixelY,
+          blend565(frame.getPixel(pixelX, pixelY), colour, opacity));
     }
   }
 }
@@ -956,7 +940,7 @@ static void initializeSceneSeeds() {
     clouds[index].x = randomGenerator.rangeInt(-18, SCREEN_W + 18);
 
     clouds[index].worldAltitude =
-      13.0f + index * 9.5f + randomGenerator.range(-3.5f, 3.5f);
+        13.0f + index * 9.5f + randomGenerator.range(-3.5f, 3.5f);
 
     clouds[index].size = randomGenerator.rangeInt(8, 17);
 
@@ -1118,8 +1102,7 @@ static void drawParticles() {
 
       radius = maxInt16((int16_t)1, radius);
 
-      particle.setBoundingBox(x - radius, y - radius,
-                              x + radius, y + radius);
+      particle.setBoundingBox(x - radius, y - radius, x + radius, y + radius);
       if (!particle.isVisibleOnScreen()) {
         continue;
       }
@@ -1138,8 +1121,8 @@ static void drawParticles() {
 
       radius = maxInt16((int16_t)1, radius);
 
-      particle.setBoundingBox(x - radius - 1, y - radius - 1,
-                              x + radius + 1, y + radius + 1);
+      particle.setBoundingBox(x - radius - 1, y - radius - 1, x + radius + 1,
+                              y + radius + 1);
       if (!particle.isVisibleOnScreen()) {
         continue;
       }
@@ -1186,11 +1169,11 @@ static Fragment *allocateFragment() {
   return &fragments[replacement];
 }
 
-static Fragment *createFragment(FragmentType type, float x, float y, float width,
-                                float height, float velocityX, float velocityY,
-                                float rotation, float spin, float life,
-                                uint16_t bandColour, float fuelFraction,
-                                int8_t bandY) {
+static Fragment *createFragment(FragmentType type, float x, float y,
+                                float width, float height, float velocityX,
+                                float velocityY, float rotation, float spin,
+                                float life, uint16_t bandColour,
+                                float fuelFraction, int8_t bandY) {
   Fragment *fragment = allocateFragment();
 
   fragment->type = type;
@@ -1247,7 +1230,8 @@ static void updateFragments(float deltaSeconds) {
         fragment.width *= ratio;
         fragment.height *= ratio;
         if (fragment.bandY >= 0) {
-          fragment.bandY = (int8_t)maxInt16(1, (int16_t)roundf(fragment.bandY * ratio));
+          fragment.bandY =
+              (int8_t)maxInt16(1, (int16_t)roundf(fragment.bandY * ratio));
         }
         fragment.cameraScale = newCameraScale;
       }
@@ -1259,15 +1243,16 @@ static void updateFragments(float deltaSeconds) {
       float gravity = gravityAtAltitude(fragment.worldAltitude);
       float density = atmosphereDensityAtAltitude(fragment.worldAltitude);
       float tumble = fabsf(sinf(fragment.rotation));
-      float dragArea = lerpFloat(fragment.minimumDragArea,
-                                 fragment.maximumDragArea, tumble);
+      float dragArea =
+          lerpFloat(fragment.minimumDragArea, fragment.maximumDragArea, tumble);
       float dragCoefficient = lerpFloat(0.72f, 1.35f, tumble);
       float speedSquared = fragment.worldVelocity * fragment.worldVelocity;
 
       // Fd = 1/2 rho Cd A v^2 and a = F/m. The scale maps the arcade world
       // units to a readable ballistic fall without changing the relationship.
       float dragAcceleration = 0.5f * density * dragCoefficient * dragArea *
-        speedSquared / maxFloat(1.0f, fragment.mass) * 0.0014f;
+                               speedSquared / maxFloat(1.0f, fragment.mass) *
+                               0.0014f;
       dragAcceleration = minFloat(5.0f, dragAcceleration);
 
       float acceleration = -gravity;
@@ -1279,9 +1264,9 @@ static void updateFragments(float deltaSeconds) {
 
       fragment.worldVelocity += acceleration * deltaSeconds;
       fragment.worldAltitude = maxFloat(
-        0.0f, fragment.worldAltitude + fragment.worldVelocity * deltaSeconds);
-      fragment.y -= fragment.worldVelocity * WORLD_PIXELS_PER_ALTITUDE *
-                    deltaSeconds;
+          0.0f, fragment.worldAltitude + fragment.worldVelocity * deltaSeconds);
+      fragment.y -=
+          fragment.worldVelocity * WORLD_PIXELS_PER_ALTITUDE * deltaSeconds;
     } else {
       fragment.velocityY += fragment.gravity * deltaSeconds;
       fragment.y += fragment.velocityY * deltaSeconds;
@@ -1292,25 +1277,25 @@ static void updateFragments(float deltaSeconds) {
 }
 
 static void drawFragmentFuelWindow(const Fragment &fragment) {
-  if (fragment.type == FragmentType::SIDE_PANEL || fragment.type == FragmentType::ENGINE || fragment.type == FragmentType::CAPSULE) {
+  if (fragment.type == FragmentType::SIDE_PANEL ||
+      fragment.type == FragmentType::ENGINE ||
+      fragment.type == FragmentType::CAPSULE) {
     return;
   }
 
   float scale = fragment.cameraScale;
   float windowWidth = maxFloat(2.0f, 5.0f * scale);
-  float windowHeight = maxFloat(3.0f * scale,
-                                fragment.height - 6.0f * scale);
+  float windowHeight = maxFloat(3.0f * scale, fragment.height - 6.0f * scale);
 
   fillRotatedRectangle(fragment.x, fragment.y, windowWidth, windowHeight,
                        fragment.rotation, C_GLASS_EDGE);
 
-  fillRotatedRectangle(fragment.x, fragment.y,
-                       maxFloat(1.0f, 3.0f * scale),
+  fillRotatedRectangle(fragment.x, fragment.y, maxFloat(1.0f, 3.0f * scale),
                        maxFloat(1.0f, windowHeight - 2.0f * scale),
                        fragment.rotation, C_GLASS);
 
-  float fuelHeight = maxFloat(0.0f, windowHeight - 2.0f * scale) *
-                     fragment.fuelFraction;
+  float fuelHeight =
+      maxFloat(0.0f, windowHeight - 2.0f * scale) * fragment.fuelFraction;
 
   if (fuelHeight > 0.5f) {
     float localCentreY = windowHeight * 0.5f - fuelHeight * 0.5f - scale;
@@ -1358,7 +1343,7 @@ static void drawFragment(const Fragment &fragment) {
   }
 
   uint16_t bodyColour =
-    fragment.type == FragmentType::SIDE_PANEL ? C_METAL : fragment.bodyColour;
+      fragment.type == FragmentType::SIDE_PANEL ? C_METAL : fragment.bodyColour;
 
   fillRotatedRectangle(fragment.x + 1.0f, fragment.y + 1.0f, fragment.width,
                        fragment.height, fragment.rotation, C_BLACK);
@@ -1383,9 +1368,9 @@ static void drawFragment(const Fragment &fragment) {
   drawFragmentFuelWindow(fragment);
 
   if (fragment.type == FragmentType::WHOLE_STAGE) {
-    PointF engineCentre = rotatePoint(
-      0.0f, fragment.height * 0.5f + fragment.width * 0.13f,
-      fragment.x, fragment.y, fragment.rotation);
+    PointF engineCentre =
+        rotatePoint(0.0f, fragment.height * 0.5f + fragment.width * 0.13f,
+                    fragment.x, fragment.y, fragment.rotation);
     fillRotatedRectangle(engineCentre.x, engineCentre.y,
                          maxFloat(3.0f, fragment.width * 0.46f),
                          maxFloat(2.0f, fragment.width * 0.26f),
@@ -1402,12 +1387,12 @@ static void drawFragments() {
 
     float sine = fabsf(sinf(fragment.rotation));
     float cosine = fabsf(cosf(fragment.rotation));
-    float extentX = fragment.width * 0.5f * cosine +
-                    fragment.height * 0.5f * sine;
-    float extentY = fragment.width * 0.5f * sine +
-                    fragment.height * 0.5f * cosine;
-    float detailMargin = maxFloat(4.0f * fragment.cameraScale,
-                                  fragment.width * 0.20f);
+    float extentX =
+        fragment.width * 0.5f * cosine + fragment.height * 0.5f * sine;
+    float extentY =
+        fragment.width * 0.5f * sine + fragment.height * 0.5f * cosine;
+    float detailMargin =
+        maxFloat(4.0f * fragment.cameraScale, fragment.width * 0.20f);
     fragment.setBoundingBox(fragment.x - extentX - detailMargin,
                             fragment.y - extentY - detailMargin,
                             fragment.x + extentX + detailMargin,
@@ -1428,13 +1413,14 @@ static const MissionDefinition &currentMission() {
 }
 
 static float missionDisplayTargetAltitude() {
-  static const float DISPLAY_TARGETS[] = { 45.0f, 100.0f, 180.0f, 220.0f, 340.0f };
+  static const float DISPLAY_TARGETS[] = {45.0f, 100.0f, 180.0f, 220.0f,
+                                          340.0f};
   return DISPLAY_TARGETS[game.selectedMission];
 }
 
 static float missionProgressAt(float internalAltitude) {
   return clampFloat(internalAltitude /
-                      maxFloat(1.0f, (float)currentMission().targetAltitude),
+                        maxFloat(1.0f, (float)currentMission().targetAltitude),
                     0.0f, 1.20f);
 }
 
@@ -1448,8 +1434,8 @@ static float displayedVelocityAt(float internalVelocity) {
 }
 
 static float currentRocketVisualScale() {
-  return sceneProjectionModel.atAltitude(
-    displayedAltitudeAt(game.altitude)).rocketScale;
+  return sceneProjectionModel.atAltitude(displayedAltitudeAt(game.altitude))
+      .rocketScale;
 }
 
 static const StageDefinition *currentStage() {
@@ -1571,8 +1557,8 @@ static void scaleRocketGeometry(RocketGeometry &geometry, float scale) {
 static void buildCurrentRocketGeometry(RocketGeometry &geometry) {
   buildRocketGeometryFor(currentMission(), game.activeStage,
                          currentRocketNoseY(), geometry);
-  SceneProjection projection = sceneProjectionModel.atAltitude(
-    displayedAltitudeAt(game.altitude));
+  SceneProjection projection =
+      sceneProjectionModel.atAltitude(displayedAltitudeAt(game.altitude));
   scaleRocketGeometry(geometry, projection.rocketScale);
   float pathOffsetX = projection.rocketCentreX - SCREEN_W * 0.5f;
   geometry.payloadX += pathOffsetX;
@@ -1589,8 +1575,8 @@ static float currentFuelFraction() {
     return 0.0f;
   }
 
-  float burnSeconds = flightTiming.stageBurnSeconds(
-    currentMission(), game.activeStage);
+  float burnSeconds =
+      flightTiming.stageBurnSeconds(currentMission(), game.activeStage);
   return clamp01(1.0f - game.stageElapsed / maxFloat(0.01f, burnSeconds));
 }
 
@@ -1620,7 +1606,7 @@ static void updateWorldCamera(float deltaSeconds) {
   game.previousCameraAltitude = game.cameraAltitude;
 
   bool cameraCanMove =
-    game.phase == FlightPhase::BURNING || game.phase == FlightPhase::COASTING;
+      game.phase == FlightPhase::BURNING || game.phase == FlightPhase::COASTING;
 
   if (!cameraCanMove) {
     return;
@@ -1644,7 +1630,8 @@ static void updateWorldCamera(float deltaSeconds) {
     float followAmount = 1.0f - expf(-CAMERA_FOLLOW_SPEED * deltaSeconds);
 
     float nextCameraAltitude =
-      game.cameraAltitude + (desiredCameraAltitude - game.cameraAltitude) * followAmount;
+        game.cameraAltitude +
+        (desiredCameraAltitude - game.cameraAltitude) * followAmount;
 
     float remainingLag = desiredCameraAltitude - nextCameraAltitude;
 
@@ -1660,7 +1647,8 @@ static void updateWorldCamera(float deltaSeconds) {
   }
 
   float cameraMovementPixels =
-    (game.cameraAltitude - game.previousCameraAltitude) * WORLD_PIXELS_PER_ALTITUDE;
+      (game.cameraAltitude - game.previousCameraAltitude) *
+      WORLD_PIXELS_PER_ALTITUDE;
 
   shiftWorldEffectsForCamera(cameraMovementPixels);
 }
@@ -1681,7 +1669,7 @@ static uint16_t skyTopColour(float altitude) {
   uint16_t upper = C565(5, 8, 23);
 
   uint16_t firstBlend =
-    blend565(dawn, blue, (uint8_t)(blueTransition * 255.0f));
+      blend565(dawn, blue, (uint8_t)(blueTransition * 255.0f));
 
   return blend565(firstBlend, upper, (uint8_t)(spaceTransition * 255.0f));
 }
@@ -1698,14 +1686,14 @@ static uint16_t skyBottomColour(float altitude) {
   uint16_t upper = C565(8, 12, 30);
 
   uint16_t firstBlend =
-    blend565(horizon, blue, (uint8_t)(blueTransition * 255.0f));
+      blend565(horizon, blue, (uint8_t)(blueTransition * 255.0f));
 
   return blend565(firstBlend, upper, (uint8_t)(spaceTransition * 255.0f));
 }
 
 static uint16_t skyColourAtY(float altitude, int16_t y) {
   float verticalAmount =
-    clampFloat((float)y / (float)(SCREEN_H - 1), 0.0f, 1.0f);
+      clampFloat((float)y / (float)(SCREEN_H - 1), 0.0f, 1.0f);
 
   return blend565(skyTopColour(altitude), skyBottomColour(altitude),
                   (uint8_t)(verticalAmount * 255.0f));
@@ -1725,7 +1713,7 @@ static void drawStars(float altitude) {
     Star &star = stars[index];
 
     float revealStart =
-      58.0f + (1.0f - star.parallax) * 110.0f + (index % 9) * 7.0f;
+        58.0f + (1.0f - star.parallax) * 110.0f + (index % 9) * 7.0f;
 
     float visibility = smoothStep(revealStart, revealStart + 190.0f, altitude);
 
@@ -1743,8 +1731,7 @@ static void drawStars(float altitude) {
 
     int16_t screenY = (int16_t)movingY;
 
-    star.setBoundingBox(star.x, screenY,
-                        star.x + star.size - 1,
+    star.setBoundingBox(star.x, screenY, star.x + star.size - 1,
                         screenY + star.size - 1);
     if (!star.isVisibleOnScreen()) {
       continue;
@@ -1787,13 +1774,13 @@ static void drawSun(float altitude) {
   uint16_t background = skyColourAtY(altitude, sampledY);
 
   uint16_t sunColour =
-    blend565(background, C_YELLOW, (uint8_t)(visibility * 255.0f));
+      blend565(background, C_YELLOW, (uint8_t)(visibility * 255.0f));
 
   frame.fillCircle(137, y, 12, sunColour);
 
   frame.drawFastHLine(
-    125, y, 24,
-    blend565(background, C_WHITE, (uint8_t)(visibility * 145.0f)));
+      125, y, 24,
+      blend565(background, C_WHITE, (uint8_t)(visibility * 145.0f)));
 }
 
 static void drawCloudShape(int16_t centreX, int16_t centreY, int16_t size,
@@ -1810,16 +1797,16 @@ static void drawCloudShape(int16_t centreX, int16_t centreY, int16_t size,
 
 static void drawClouds(float cameraAltitude, uint32_t now) {
   float atmosphereVisibility =
-    1.0f - smoothStep(150.0f, 470.0f, cameraAltitude);
+      1.0f - smoothStep(150.0f, 470.0f, cameraAltitude);
 
   for (uint8_t index = 0; index < 18; index++) {
     Cloud &cloud = clouds[index];
 
     float layerScale =
-      WORLD_PIXELS_PER_ALTITUDE * (0.52f + cloud.layer * 0.075f);
+        WORLD_PIXELS_PER_ALTITUDE * (0.52f + cloud.layer * 0.075f);
 
     float screenY =
-      286.0f - (cloud.worldAltitude - cameraAltitude) * layerScale;
+        286.0f - (cloud.worldAltitude - cameraAltitude) * layerScale;
 
     int16_t drift = (int16_t)(sinf(now * 0.00018f + index * 1.7f) * 4.0f);
     float centreX = cloud.x + drift;
@@ -1832,7 +1819,7 @@ static void drawClouds(float cameraAltitude, uint32_t now) {
     float topVisibility = smoothStep(-40.0f, 12.0f, screenY);
 
     float bottomVisibility =
-      1.0f - smoothStep(SCREEN_H - 34.0f, SCREEN_H + 40.0f, screenY);
+        1.0f - smoothStep(SCREEN_H - 34.0f, SCREEN_H + 40.0f, screenY);
 
     float visibility = atmosphereVisibility * topVisibility * bottomVisibility;
 
@@ -1853,8 +1840,8 @@ static void drawClouds(float cameraAltitude, uint32_t now) {
     uint16_t originalColour = cloud.layer == 0 ? C565(186, 198, 205) : C_CLOUD;
 
     uint16_t cloudColour =
-      blend565(skyColourAtY(cameraAltitude, sampledY), originalColour,
-               (uint8_t)(visibility * 255.0f));
+        blend565(skyColourAtY(cameraAltitude, sampledY), originalColour,
+                 (uint8_t)(visibility * 255.0f));
 
     drawCloudShape(cloud.x + drift, (int16_t)screenY, cloud.size, cloudColour);
   }
@@ -1912,8 +1899,7 @@ struct EarthLandPoint {
 };
 
 static bool projectedEarthBoundsAtY(float centreX, float centreY, float radius,
-                                    int16_t y, int16_t &left,
-                                    int16_t &right) {
+                                    int16_t y, int16_t &left, int16_t &right) {
   float deltaY = (float)y - centreY;
   float inside = radius * radius - deltaY * deltaY;
 
@@ -1936,11 +1922,9 @@ static bool projectedEarthBoundsAtY(float centreX, float centreY, float radius,
 }
 
 static void drawProjectedEarthOcean(float centreX, float centreY, float radius,
-                                    float earthVisibility,
-                                    float skyAltitude) {
+                                    float earthVisibility, float skyAltitude) {
   int16_t startY = maxInt16(0, (int16_t)floorf(centreY - radius));
-  int16_t endY = minInt16(SCREEN_H - 1,
-                          (int16_t)ceilf(centreY + radius));
+  int16_t endY = minInt16(SCREEN_H - 1, (int16_t)ceilf(centreY + radius));
 
   for (int16_t y = startY; y <= endY; y++) {
     float deltaY = (float)y - centreY;
@@ -1966,16 +1950,14 @@ static void drawProjectedEarthOcean(float centreX, float centreY, float radius,
     uint16_t ocean = blend565(C_OCEAN_LIGHT, C_OCEAN_DEEP,
                               (uint8_t)(58.0f + depth * 132.0f));
     uint16_t sky = skyColourAtY(skyAltitude, y);
-    ocean = blend565(sky, ocean,
-                     (uint8_t)(clamp01(earthVisibility) * 255.0f));
+    ocean = blend565(sky, ocean, (uint8_t)(clamp01(earthVisibility) * 255.0f));
     frame.drawFastHLine(left, y, right - left + 1, ocean);
 
     // A subtle limb only when the actual sides of the globe are visible.
     if (radius < 220.0f) {
       int16_t limbWidth = maxInt16(1, (int16_t)((right - left + 1) / 20));
       if (rawLeft >= 0) {
-        frame.drawFastHLine(left, y, limbWidth,
-                            blend565(ocean, C_VOID, 48));
+        frame.drawFastHLine(left, y, limbWidth, blend565(ocean, C_VOID, 48));
       }
       if (rawRight < SCREEN_W) {
         frame.drawFastHLine(right - limbWidth + 1, y, limbWidth,
@@ -2004,13 +1986,12 @@ static void drawProjectedEarthLandMass(float sphereX, float sphereY,
                                        const EarthLandPoint *points,
                                        uint8_t pointCount,
                                        uint16_t targetColour,
-                                       float longitudeShift,
-                                       float visibility) {
+                                       float longitudeShift, float visibility) {
   if (pointCount < 3) {
     return;
   }
 
-  EarthLandPoint centre = { 0.0f, 0.0f };
+  EarthLandPoint centre = {0.0f, 0.0f};
   for (uint8_t index = 0; index < pointCount; index++) {
     centre.x += points[index].x;
     centre.y += points[index].y;
@@ -2018,24 +1999,22 @@ static void drawProjectedEarthLandMass(float sphereX, float sphereY,
   centre.x /= pointCount;
   centre.y /= pointCount;
 
-  PointF projectedCentre = projectEarthLandPoint(
-    sphereX, sphereY, sphereRadius, centre, longitudeShift);
-  uint16_t colour = blend565(C_OCEAN, targetColour,
-                              (uint8_t)(visibility * 225.0f));
+  PointF projectedCentre = projectEarthLandPoint(sphereX, sphereY, sphereRadius,
+                                                 centre, longitudeShift);
+  uint16_t colour =
+      blend565(C_OCEAN, targetColour, (uint8_t)(visibility * 225.0f));
 
   for (uint8_t index = 0; index < pointCount; index++) {
     uint8_t next = (uint8_t)((index + 1) % pointCount);
-    PointF first = projectEarthLandPoint(
-      sphereX, sphereY, sphereRadius, points[index], longitudeShift);
-    PointF second = projectEarthLandPoint(
-      sphereX, sphereY, sphereRadius, points[next], longitudeShift);
+    PointF first = projectEarthLandPoint(sphereX, sphereY, sphereRadius,
+                                         points[index], longitudeShift);
+    PointF second = projectEarthLandPoint(sphereX, sphereY, sphereRadius,
+                                          points[next], longitudeShift);
 
-    frame.fillTriangle((int16_t)roundf(projectedCentre.x),
-                       (int16_t)roundf(projectedCentre.y),
-                       (int16_t)roundf(first.x),
-                       (int16_t)roundf(first.y),
-                       (int16_t)roundf(second.x),
-                       (int16_t)roundf(second.y), colour);
+    frame.fillTriangle(
+        (int16_t)roundf(projectedCentre.x), (int16_t)roundf(projectedCentre.y),
+        (int16_t)roundf(first.x), (int16_t)roundf(first.y),
+        (int16_t)roundf(second.x), (int16_t)roundf(second.y), colour);
   }
 }
 
@@ -2049,69 +2028,63 @@ static void drawProjectedEarthDetails(float centreX, float centreY,
   }
 
   static const EarthLandPoint NORTH_AMERICA[] = {
-    { -0.72f, -0.43f }, { -0.52f, -0.52f }, { -0.31f, -0.42f },
-    { -0.20f, -0.25f }, { -0.31f, -0.08f }, { -0.47f, -0.04f },
-    { -0.62f, -0.18f }, { -0.76f, -0.24f }
-  };
-  static const EarthLandPoint CENTRAL_AMERICA[] = {
-    { -0.45f, -0.08f }, { -0.28f, -0.02f }, { -0.20f, 0.08f },
-    { -0.30f, 0.14f }, { -0.47f, 0.05f }
-  };
+      {-0.72f, -0.43f}, {-0.52f, -0.52f}, {-0.31f, -0.42f}, {-0.20f, -0.25f},
+      {-0.31f, -0.08f}, {-0.47f, -0.04f}, {-0.62f, -0.18f}, {-0.76f, -0.24f}};
+  static const EarthLandPoint CENTRAL_AMERICA[] = {{-0.45f, -0.08f},
+                                                   {-0.28f, -0.02f},
+                                                   {-0.20f, 0.08f},
+                                                   {-0.30f, 0.14f},
+                                                   {-0.47f, 0.05f}};
   static const EarthLandPoint SOUTH_AMERICA[] = {
-    { -0.31f, 0.10f }, { -0.17f, 0.16f }, { -0.12f, 0.32f },
-    { -0.23f, 0.58f }, { -0.36f, 0.45f }, { -0.42f, 0.22f }
-  };
+      {-0.31f, 0.10f}, {-0.17f, 0.16f}, {-0.12f, 0.32f},
+      {-0.23f, 0.58f}, {-0.36f, 0.45f}, {-0.42f, 0.22f}};
   static const EarthLandPoint EURASIA[] = {
-    { -0.10f, -0.46f }, { 0.12f, -0.55f }, { 0.38f, -0.49f },
-    { 0.66f, -0.34f }, { 0.72f, -0.16f }, { 0.49f, -0.08f },
-    { 0.34f, 0.02f }, { 0.12f, -0.04f }, { -0.03f, -0.17f },
-    { -0.18f, -0.28f }
-  };
+      {-0.10f, -0.46f}, {0.12f, -0.55f}, {0.38f, -0.49f}, {0.66f, -0.34f},
+      {0.72f, -0.16f},  {0.49f, -0.08f}, {0.34f, 0.02f},  {0.12f, -0.04f},
+      {-0.03f, -0.17f}, {-0.18f, -0.28f}};
   static const EarthLandPoint AFRICA[] = {
-    { 0.02f, -0.12f }, { 0.22f, -0.10f }, { 0.34f, 0.06f },
-    { 0.25f, 0.35f }, { 0.09f, 0.52f }, { -0.04f, 0.27f },
-    { -0.12f, 0.02f }
-  };
-  static const EarthLandPoint AUSTRALIA[] = {
-    { 0.47f, 0.31f }, { 0.68f, 0.28f }, { 0.76f, 0.43f },
-    { 0.58f, 0.54f }, { 0.43f, 0.44f }
-  };
+      {0.02f, -0.12f}, {0.22f, -0.10f}, {0.34f, 0.06f}, {0.25f, 0.35f},
+      {0.09f, 0.52f},  {-0.04f, 0.27f}, {-0.12f, 0.02f}};
+  static const EarthLandPoint AUSTRALIA[] = {{0.47f, 0.31f},
+                                             {0.68f, 0.28f},
+                                             {0.76f, 0.43f},
+                                             {0.58f, 0.54f},
+                                             {0.43f, 0.44f}};
   static const EarthLandPoint GREENLAND[] = {
-    { -0.31f, -0.67f }, { -0.18f, -0.72f }, { -0.12f, -0.58f },
-    { -0.25f, -0.51f }
-  };
+      {-0.31f, -0.67f}, {-0.18f, -0.72f}, {-0.12f, -0.58f}, {-0.25f, -0.51f}};
 
   float longitudeShift = sinf(now * 0.000055f) * 0.055f;
-  drawProjectedEarthLandMass(centreX, centreY, radius,
-    NORTH_AMERICA, sizeof(NORTH_AMERICA) / sizeof(NORTH_AMERICA[0]),
-    C_LAND, longitudeShift, detailVisibility);
-  drawProjectedEarthLandMass(centreX, centreY, radius,
-    CENTRAL_AMERICA, sizeof(CENTRAL_AMERICA) / sizeof(CENTRAL_AMERICA[0]),
-    C_LAND_LIGHT, longitudeShift, detailVisibility);
-  drawProjectedEarthLandMass(centreX, centreY, radius,
-    SOUTH_AMERICA, sizeof(SOUTH_AMERICA) / sizeof(SOUTH_AMERICA[0]),
-    C_LAND_DARK, longitudeShift, detailVisibility);
-  drawProjectedEarthLandMass(centreX, centreY, radius,
-    EURASIA, sizeof(EURASIA) / sizeof(EURASIA[0]),
-    C_LAND_LIGHT, longitudeShift, detailVisibility);
-  drawProjectedEarthLandMass(centreX, centreY, radius,
-    AFRICA, sizeof(AFRICA) / sizeof(AFRICA[0]),
-    C_LAND, longitudeShift, detailVisibility);
-  drawProjectedEarthLandMass(centreX, centreY, radius,
-    AUSTRALIA, sizeof(AUSTRALIA) / sizeof(AUSTRALIA[0]),
-    C_LAND_DARK, longitudeShift, detailVisibility);
-  drawProjectedEarthLandMass(centreX, centreY, radius,
-    GREENLAND, sizeof(GREENLAND) / sizeof(GREENLAND[0]),
-    C_LAND_LIGHT, longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius, NORTH_AMERICA,
+                             sizeof(NORTH_AMERICA) / sizeof(NORTH_AMERICA[0]),
+                             C_LAND, longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius, CENTRAL_AMERICA,
+                             sizeof(CENTRAL_AMERICA) /
+                                 sizeof(CENTRAL_AMERICA[0]),
+                             C_LAND_LIGHT, longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius, SOUTH_AMERICA,
+                             sizeof(SOUTH_AMERICA) / sizeof(SOUTH_AMERICA[0]),
+                             C_LAND_DARK, longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius, EURASIA,
+                             sizeof(EURASIA) / sizeof(EURASIA[0]), C_LAND_LIGHT,
+                             longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius, AFRICA,
+                             sizeof(AFRICA) / sizeof(AFRICA[0]), C_LAND,
+                             longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius, AUSTRALIA,
+                             sizeof(AUSTRALIA) / sizeof(AUSTRALIA[0]),
+                             C_LAND_DARK, longitudeShift, detailVisibility);
+  drawProjectedEarthLandMass(centreX, centreY, radius, GREENLAND,
+                             sizeof(GREENLAND) / sizeof(GREENLAND[0]),
+                             C_LAND_LIGHT, longitudeShift, detailVisibility);
 
   float cloudVisibility = globeVisibility * globeVisibility * earthVisibility;
   if (cloudVisibility <= 0.03f) {
     return;
   }
 
-  uint16_t cloudColour = blend565(C_OCEAN_LIGHT, C_WHITE,
-                                   (uint8_t)(cloudVisibility * 145.0f));
-  static const float CLOUD_LATITUDES[] = { -0.45f, -0.16f, 0.13f, 0.39f };
+  uint16_t cloudColour =
+      blend565(C_OCEAN_LIGHT, C_WHITE, (uint8_t)(cloudVisibility * 145.0f));
+  static const float CLOUD_LATITUDES[] = {-0.45f, -0.16f, 0.13f, 0.39f};
 
   for (uint8_t band = 0; band < 4; band++) {
     float phase = now * 0.00022f + band * 1.73f;
@@ -2120,8 +2093,7 @@ static void drawProjectedEarthDetails(float centreX, float centreY,
     int16_t previousY = 0;
 
     int16_t xStart = maxInt16(0, (int16_t)(centreX - radius * 0.88f));
-    int16_t xEnd = minInt16(SCREEN_W - 1,
-                            (int16_t)(centreX + radius * 0.88f));
+    int16_t xEnd = minInt16(SCREEN_W - 1, (int16_t)(centreX + radius * 0.88f));
 
     for (int16_t x = xStart; x <= xEnd; x += 2) {
       float nx = ((float)x - centreX) / radius;
@@ -2133,9 +2105,8 @@ static void drawProjectedEarthDetails(float centreX, float centreY,
 
       float wave = sinf(nx * 7.0f + phase) * radius * 0.025f +
                    sinf(nx * 15.0f - phase * 0.7f) * radius * 0.012f;
-      int16_t y = (int16_t)roundf(centreY +
-                                   CLOUD_LATITUDES[band] * radius +
-                                   nx * radius * 0.055f + wave);
+      int16_t y = (int16_t)roundf(centreY + CLOUD_LATITUDES[band] * radius +
+                                  nx * radius * 0.055f + wave);
       float dy = (float)y - centreY;
       bool insideSphere = nx * nx + (dy * dy) / (radius * radius) < 0.94f;
       bool gap = ((x + band * 19 + (int16_t)(phase * 7.0f)) % 23) < 6;
@@ -2169,24 +2140,23 @@ static void drawProjectedEarthAtmosphere(float centreX, float centreY,
   float outerRadius = radius + thickness;
   float innerRadius = maxFloat(1.0f, radius - 0.5f);
   int16_t startY = maxInt16(0, (int16_t)floorf(centreY - outerRadius));
-  int16_t endY = minInt16(SCREEN_H - 1,
-                          (int16_t)ceilf(centreY + outerRadius));
+  int16_t endY = minInt16(SCREEN_H - 1, (int16_t)ceilf(centreY + outerRadius));
   uint8_t amount = (uint8_t)(clamp01(earthVisibility) * 125.0f);
 
   for (int16_t y = startY; y <= endY; y++) {
     int16_t outerLeft;
     int16_t outerRight;
-    if (!projectedEarthBoundsAtY(centreX, centreY, outerRadius, y,
-                                 outerLeft, outerRight)) {
+    if (!projectedEarthBoundsAtY(centreX, centreY, outerRadius, y, outerLeft,
+                                 outerRight)) {
       continue;
     }
 
-    uint16_t colour = blend565(skyColourAtY(skyAltitude, y),
-                                C_ATMOSPHERE, amount);
+    uint16_t colour =
+        blend565(skyColourAtY(skyAltitude, y), C_ATMOSPHERE, amount);
     int16_t innerLeft;
     int16_t innerRight;
-    if (!projectedEarthBoundsAtY(centreX, centreY, innerRadius, y,
-                                 innerLeft, innerRight)) {
+    if (!projectedEarthBoundsAtY(centreX, centreY, innerRadius, y, innerLeft,
+                                 innerRight)) {
       frame.drawFastHLine(outerLeft, y, outerRight - outerLeft + 1, colour);
       continue;
     }
@@ -2211,11 +2181,9 @@ static void drawEarth(float earthAltitude, float skyAltitude,
   float centreY = projection.earthCentreY;
   float centreX = SCREEN_W * 0.5f;
 
-  drawProjectedEarthOcean(centreX, centreY, radius, 1.0f,
-                          skyAltitude);
+  drawProjectedEarthOcean(centreX, centreY, radius, 1.0f, skyAltitude);
   drawProjectedEarthDetails(centreX, centreY, radius, 1.0f, now);
-  drawProjectedEarthAtmosphere(centreX, centreY, radius, 1.0f,
-                               skyAltitude);
+  drawProjectedEarthAtmosphere(centreX, centreY, radius, 1.0f, skyAltitude);
 }
 
 static void drawBackground(float visualAltitude, float earthAltitude,
@@ -2370,58 +2338,52 @@ struct RocketTransform {
   float angle;
 
   PointF apply(float x, float y) const {
-    return rotatePoint(x - pivotX, y - pivotY,
-                       pivotX, pivotY, angle);
+    return rotatePoint(x - pivotX, y - pivotY, pivotX, pivotY, angle);
   }
 };
 
 static void drawRocketLine(float x1, float y1, float x2, float y2,
-                           const RocketTransform &transform,
-                           uint16_t colour) {
+                           const RocketTransform &transform, uint16_t colour) {
   PointF first = transform.apply(x1, y1);
   PointF second = transform.apply(x2, y2);
   rocketRenderTarget->drawLine(
-    (int16_t)roundf(first.x), (int16_t)roundf(first.y),
-    (int16_t)roundf(second.x), (int16_t)roundf(second.y), colour);
+      (int16_t)roundf(first.x), (int16_t)roundf(first.y),
+      (int16_t)roundf(second.x), (int16_t)roundf(second.y), colour);
 }
 
-static void drawRocketPixel(float x, float y,
-                            const RocketTransform &transform,
+static void drawRocketPixel(float x, float y, const RocketTransform &transform,
                             uint16_t colour) {
   PointF point = transform.apply(x, y);
-  rocketRenderTarget->drawPixel(
-    (int16_t)roundf(point.x), (int16_t)roundf(point.y), colour);
+  rocketRenderTarget->drawPixel((int16_t)roundf(point.x),
+                                (int16_t)roundf(point.y), colour);
 }
 
 static void drawPitchedHLine(int16_t x, int16_t y, int16_t width,
                              const RocketTransform &transform,
                              uint16_t colour) {
-  drawRocketLine(x, y, x + maxInt16(1, width) - 1, y,
-                 transform, colour);
+  drawRocketLine(x, y, x + maxInt16(1, width) - 1, y, transform, colour);
 }
 
-static void fillPitchedQuad(float x1, float y1, float x2, float y2,
-                            float x3, float y3, float x4, float y4,
-                            const RocketTransform &transform,
-                            uint16_t colour) {
+static void fillPitchedQuad(float x1, float y1, float x2, float y2, float x3,
+                            float y3, float x4, float y4,
+                            const RocketTransform &transform, uint16_t colour) {
   PointF first = transform.apply(x1, y1);
   PointF second = transform.apply(x2, y2);
   PointF third = transform.apply(x3, y3);
   PointF fourth = transform.apply(x4, y4);
 
   rocketRenderTarget->fillTriangle(
-    (int16_t)roundf(first.x), (int16_t)roundf(first.y),
-    (int16_t)roundf(second.x), (int16_t)roundf(second.y),
-    (int16_t)roundf(third.x), (int16_t)roundf(third.y), colour);
+      (int16_t)roundf(first.x), (int16_t)roundf(first.y),
+      (int16_t)roundf(second.x), (int16_t)roundf(second.y),
+      (int16_t)roundf(third.x), (int16_t)roundf(third.y), colour);
   rocketRenderTarget->fillTriangle(
-    (int16_t)roundf(first.x), (int16_t)roundf(first.y),
-    (int16_t)roundf(third.x), (int16_t)roundf(third.y),
-    (int16_t)roundf(fourth.x), (int16_t)roundf(fourth.y), colour);
+      (int16_t)roundf(first.x), (int16_t)roundf(first.y),
+      (int16_t)roundf(third.x), (int16_t)roundf(third.y),
+      (int16_t)roundf(fourth.x), (int16_t)roundf(fourth.y), colour);
 }
 
-static void fillPitchedRect(int16_t x, int16_t y, int16_t width,
-                            int16_t height, const RocketTransform &transform,
-                            uint16_t colour) {
+static void fillPitchedRect(int16_t x, int16_t y, int16_t width, int16_t height,
+                            const RocketTransform &transform, uint16_t colour) {
   int16_t right = x + maxInt16(1, width) - 1;
   int16_t bottom = y + maxInt16(1, height) - 1;
 
@@ -2430,13 +2392,11 @@ static void fillPitchedRect(int16_t x, int16_t y, int16_t width,
     return;
   }
 
-  fillPitchedQuad(x, y, right, y, right, bottom, x, bottom,
-                  transform, colour);
+  fillPitchedQuad(x, y, right, y, right, bottom, x, bottom, transform, colour);
 }
 
-static void fillPitchedBody(int16_t x, int16_t y, int16_t width,
-                            int16_t height, const RocketTransform &transform,
-                            uint16_t colour) {
+static void fillPitchedBody(int16_t x, int16_t y, int16_t width, int16_t height,
+                            const RocketTransform &transform, uint16_t colour) {
   fillPitchedRect(x, y, width, height, transform, colour);
 }
 
@@ -2472,35 +2432,35 @@ static void drawPayload(const RocketGeometry &geometry, bool recoveryCapsule,
   int16_t domeY = y + scaledSize(8.0f, scale);
 
   PointF domeCentre = transform.apply(centreX, domeY);
-  rocketRenderTarget->fillCircle(
-    (int16_t)roundf(domeCentre.x), (int16_t)roundf(domeCentre.y),
-    maxInt16(2, width / 2 - two), C_PAPER);
+  rocketRenderTarget->fillCircle((int16_t)roundf(domeCentre.x),
+                                 (int16_t)roundf(domeCentre.y),
+                                 maxInt16(2, width / 2 - two), C_PAPER);
 
   fillPitchedRect(x + two, domeY, maxInt16(2, width - four),
                   maxInt16(2, y + height - domeY), transform, C_PAPER);
 
   fillPitchedRect(x + three, y + scaledSize(7.0f, scale), three,
-                  maxInt16(2, height - scaledSize(10.0f, scale)),
-                  transform, C_HIGHLIGHT);
+                  maxInt16(2, height - scaledSize(10.0f, scale)), transform,
+                  C_HIGHLIGHT);
 
   fillPitchedRect(x + width - five, domeY, two,
-                  maxInt16(2, height - scaledSize(10.0f, scale)),
-                  transform, C_METAL);
+                  maxInt16(2, height - scaledSize(10.0f, scale)), transform,
+                  C_METAL);
 
   int16_t windowWidth = scaledSize(8.0f, scale, 4);
   int16_t windowHeight = scaledSize(6.0f, scale, 3);
-  fillPitchedRect(centreX - windowWidth / 2, domeY,
-                  windowWidth, windowHeight, transform, C_GLASS);
+  fillPitchedRect(centreX - windowWidth / 2, domeY, windowWidth, windowHeight,
+                  transform, C_GLASS);
 
   drawRocketPixel(centreX - two, domeY + one, transform, C_CYAN);
   drawRocketPixel(centreX - one, domeY + one, transform, C_WHITE);
 
   fillPitchedRect(x + three, y + height - five,
-                  maxInt16(2, width - scaledSize(6.0f, scale)), four,
-                  transform, recoveryCapsule ? C_CYAN : C_PURPLE);
+                  maxInt16(2, width - scaledSize(6.0f, scale)), four, transform,
+                  recoveryCapsule ? C_CYAN : C_PURPLE);
 
-  drawPitchedHLine(x + two, y + height - one,
-                   maxInt16(2, width - four), transform, C_METAL_DARK);
+  drawPitchedHLine(x + two, y + height - one, maxInt16(2, width - four),
+                   transform, C_METAL_DARK);
 }
 
 static void drawFuelWindow(int16_t stageX, int16_t stageY, int16_t stageWidth,
@@ -2518,11 +2478,10 @@ static void drawFuelWindow(int16_t stageX, int16_t stageY, int16_t stageWidth,
 
   windowHeight = maxInt16(scaledSize(8.0f, scale, 4), windowHeight);
 
-  fillPitchedRect(windowX, windowY, windowWidth, windowHeight,
-                  transform, C_GLASS_EDGE);
+  fillPitchedRect(windowX, windowY, windowWidth, windowHeight, transform,
+                  C_GLASS_EDGE);
 
-  fillPitchedRect(windowX + one, windowY + one,
-                  maxInt16(1, windowWidth - two),
+  fillPitchedRect(windowX + one, windowY + one, maxInt16(1, windowWidth - two),
                   maxInt16(1, windowHeight - two), transform, C_GLASS);
 
   int16_t insideHeight = maxInt16(1, windowHeight - two);
@@ -2532,22 +2491,20 @@ static void drawFuelWindow(int16_t stageX, int16_t stageY, int16_t stageWidth,
   if (fuelHeight > 0) {
     int16_t fuelY = windowY + one + insideHeight - fuelHeight;
 
-    fillPitchedRect(windowX + one, fuelY,
-                    maxInt16(1, windowWidth - two), fuelHeight,
-                    transform, C_FUEL);
+    fillPitchedRect(windowX + one, fuelY, maxInt16(1, windowWidth - two),
+                    fuelHeight, transform, C_FUEL);
 
-    drawPitchedHLine(windowX + one, fuelY,
-                     maxInt16(1, windowWidth - two), transform, C_WHITE);
+    drawPitchedHLine(windowX + one, fuelY, maxInt16(1, windowWidth - two),
+                     transform, C_WHITE);
   }
 
   fillPitchedRect(windowX + one, windowY + two, one,
-                  maxInt16((int16_t)1, windowHeight / 3),
-                  transform, C565(112, 168, 179));
+                  maxInt16((int16_t)1, windowHeight / 3), transform,
+                  C565(112, 168, 179));
 
   if (active && fuelFraction < 0.16f && ((now / 110) & 1U) == 0) {
-    drawPitchedRectOutline(windowX - one, windowY - one,
-                           windowWidth + two, windowHeight + two,
-                           transform, C_RED);
+    drawPitchedRectOutline(windowX - one, windowY - one, windowWidth + two,
+                           windowHeight + two, transform, C_RED);
   }
 }
 
@@ -2563,19 +2520,16 @@ static EngineGeometry engineGeometryFor(const StageGeometry &stage,
                                         float scale) {
   int16_t stageWidth = (int16_t)roundf(stage.width);
   int16_t stageBottomY = (int16_t)roundf(stage.y + stage.height);
-  int16_t bellHeight = maxInt16(
-    scaledSize(7.0f, scale, 4),
-    (int16_t)roundf(stage.width * 0.26f));
+  int16_t bellHeight = maxInt16(scaledSize(7.0f, scale, 4),
+                                (int16_t)roundf(stage.width * 0.26f));
 
   return {
-    (int16_t)roundf(stage.x + stage.width * 0.5f),
-    stageBottomY - scaledSize(1.0f, scale),
-    (int16_t)(stageBottomY - scaledSize(1.0f, scale) + bellHeight),
-    maxInt16(scaledSize(5.0f, scale, 3),
-             (int16_t)roundf(stageWidth * 0.22f)),
-    maxInt16(scaledSize(9.0f, scale, 5),
-             (int16_t)roundf(stageWidth * 0.46f))
-  };
+      (int16_t)roundf(stage.x + stage.width * 0.5f),
+      stageBottomY - scaledSize(1.0f, scale),
+      (int16_t)(stageBottomY - scaledSize(1.0f, scale) + bellHeight),
+      maxInt16(scaledSize(5.0f, scale, 3), (int16_t)roundf(stageWidth * 0.22f)),
+      maxInt16(scaledSize(9.0f, scale, 5),
+               (int16_t)roundf(stageWidth * 0.46f))};
 }
 
 static void drawEngineAssembly(const StageGeometry &stage, float scale,
@@ -2584,29 +2538,27 @@ static void drawEngineAssembly(const StageGeometry &stage, float scale,
   int16_t throatHalfWidth = maxInt16(1, engine.throatWidth / 2);
   int16_t exitHalfWidth = maxInt16(2, engine.exitWidth / 2);
 
-  fillPitchedQuad(
-    engine.centreX - throatHalfWidth, engine.topY,
-    engine.centreX + throatHalfWidth, engine.topY,
-    engine.centreX + exitHalfWidth, engine.nozzleY,
-    engine.centreX - exitHalfWidth, engine.nozzleY,
-    transform, C_METAL_DARK);
+  fillPitchedQuad(engine.centreX - throatHalfWidth, engine.topY,
+                  engine.centreX + throatHalfWidth, engine.topY,
+                  engine.centreX + exitHalfWidth, engine.nozzleY,
+                  engine.centreX - exitHalfWidth, engine.nozzleY, transform,
+                  C_METAL_DARK);
 
   drawRocketLine(engine.centreX - throatHalfWidth, engine.topY,
-                 engine.centreX - exitHalfWidth, engine.nozzleY,
-                 transform, C_METAL);
+                 engine.centreX - exitHalfWidth, engine.nozzleY, transform,
+                 C_METAL);
   drawRocketLine(engine.centreX - exitHalfWidth, engine.nozzleY,
-                 engine.centreX + exitHalfWidth, engine.nozzleY,
-                 transform, C_METAL);
+                 engine.centreX + exitHalfWidth, engine.nozzleY, transform,
+                 C_METAL);
   drawRocketLine(engine.centreX + exitHalfWidth, engine.nozzleY,
-                 engine.centreX + throatHalfWidth, engine.topY,
-                 transform, C_METAL);
+                 engine.centreX + throatHalfWidth, engine.topY, transform,
+                 C_METAL);
 }
 
 static void drawStageBody(const StageDefinition &definition,
                           const StageGeometry &geometry, float fuelFraction,
                           bool active, float scale,
-                          const RocketTransform &transform,
-                          uint32_t now) {
+                          const RocketTransform &transform, uint32_t now) {
   int16_t x = (int16_t)roundf(geometry.x);
 
   int16_t y = (int16_t)roundf(geometry.y);
@@ -2620,21 +2572,19 @@ static void drawStageBody(const StageDefinition &definition,
   int16_t four = scaledSize(4.0f, scale);
   int16_t five = scaledSize(5.0f, scale);
 
-  fillPitchedBody(x + two, y + two, width, height,
-                  transform, C_BLACK);
+  fillPitchedBody(x + two, y + two, width, height, transform, C_BLACK);
 
   fillPitchedBody(x, y, width, height, transform, C_PAPER);
 
   fillPitchedRect(x + two, y + two, maxInt16(two, width / 6),
                   maxInt16(2, height - four), transform, C_HIGHLIGHT);
 
-  fillPitchedRect(x + width - four, y + two, two,
-                  maxInt16(2, height - four), transform, C_METAL);
+  fillPitchedRect(x + width - four, y + two, two, maxInt16(2, height - four),
+                  transform, C_METAL);
 
   int16_t bandY = y + maxInt16(five, height / 5);
 
-  fillPitchedRect(x, bandY, width, four, transform,
-                  definition.bandColour);
+  fillPitchedRect(x, bandY, width, four, transform, definition.bandColour);
 
   drawPitchedHLine(x, bandY, width, transform,
                    blend565(definition.bandColour, C_WHITE, 70));
@@ -2651,17 +2601,15 @@ static void drawStageBody(const StageDefinition &definition,
     }
   }
 
-  fillPitchedRect(x - two, y - two, width + four, three,
-                  transform, collarColour);
+  fillPitchedRect(x - two, y - two, width + four, three, transform,
+                  collarColour);
 
-  drawPitchedHLine(x - one, y + one, width + two,
-                   transform, C_METAL_DARK);
+  drawPitchedHLine(x - one, y + one, width + two, transform, C_METAL_DARK);
 
-  fillPitchedRect(x, y + height - five, width, five,
-                  transform, C_METAL_DARK);
+  fillPitchedRect(x, y + height - five, width, five, transform, C_METAL_DARK);
 
-  drawPitchedHLine(x + two, y + height - five,
-                   maxInt16(2, width - four), transform, C_METAL);
+  drawPitchedHLine(x + two, y + height - five, maxInt16(2, width - four),
+                   transform, C_METAL);
 
   for (int16_t rivetY = y + scaledSize(12.0f, scale);
        rivetY < y + height - scaledSize(8.0f, scale);
@@ -2670,8 +2618,8 @@ static void drawStageBody(const StageDefinition &definition,
     drawRocketPixel(x + width - three, rivetY, transform, C_METAL_DARK);
   }
 
-  drawFuelWindow(x, y, width, height, fuelFraction, active,
-                 scale, transform, now);
+  drawFuelWindow(x, y, width, height, fuelFraction, active, scale, transform,
+                 now);
 
   if (active) {
     drawEngineAssembly(geometry, scale, transform);
@@ -2680,14 +2628,12 @@ static void drawStageBody(const StageDefinition &definition,
 
 static void drawEngineFlame(const StageGeometry &activeGeometry,
                             float fuelFraction, float scale,
-                            const RocketTransform &transform,
-                            uint32_t now) {
+                            const RocketTransform &transform, uint32_t now) {
   EngineGeometry engine = engineGeometryFor(activeGeometry, scale);
   int16_t centreX = engine.centreX;
   int16_t nozzleY = engine.nozzleY;
 
-  float flicker = sinf(now * 0.045f) * 0.045f +
-                  sinf(now * 0.081f) * 0.025f;
+  float flicker = sinf(now * 0.045f) * 0.045f + sinf(now * 0.081f) * 0.025f;
   float burnoutTaper = smoothStep(0.0f, 0.13f, fuelFraction);
   float power = clampFloat((1.0f + flicker) * burnoutTaper, 0.0f, 1.08f);
 
@@ -2695,16 +2641,17 @@ static void drawEngineFlame(const StageGeometry &activeGeometry,
     return;
   }
 
-  float spaceAmount = smoothStep(45.0f, 165.0f,
-                                 displayedAltitudeAt(game.altitude));
-  int16_t outerLength = maxInt16(scaledSize(11.0f, scale, 7),
-    (int16_t)roundf((11.0f * scale + activeGeometry.width * 0.82f) * power));
-  int16_t baseHalfWidth = maxInt16(
-    1, (int16_t)roundf(engine.exitWidth * 0.22f));
-  int16_t shoulderHalfWidth = maxInt16(2, (int16_t)roundf(
-    activeGeometry.width * lerpFloat(0.22f, 0.30f, spaceAmount)));
-  float tipDrift = (sinf(now * 0.031f) + sinf(now * 0.017f)) *
-                   0.55f * scale;
+  float spaceAmount =
+      smoothStep(45.0f, 165.0f, displayedAltitudeAt(game.altitude));
+  int16_t outerLength = maxInt16(
+      scaledSize(11.0f, scale, 7),
+      (int16_t)roundf((11.0f * scale + activeGeometry.width * 0.82f) * power));
+  int16_t baseHalfWidth =
+      maxInt16(1, (int16_t)roundf(engine.exitWidth * 0.22f));
+  int16_t shoulderHalfWidth =
+      maxInt16(2, (int16_t)roundf(activeGeometry.width *
+                                  lerpFloat(0.22f, 0.30f, spaceAmount)));
+  float tipDrift = (sinf(now * 0.031f) + sinf(now * 0.017f)) * 0.55f * scale;
 
   // A pressure plume starts narrow at the bell, expands smoothly, then breaks
   // into a soft turbulent tail. Vacuum expansion widens it without changing
@@ -2713,27 +2660,29 @@ static void drawEngineFlame(const StageGeometry &activeGeometry,
     float amount = (float)row / maxFloat(1.0f, (float)outerLength);
     float expansion = smoothStep(0.0f, 0.58f, amount);
     float tail = 1.0f - 0.88f * smoothStep(0.72f, 1.0f, amount);
-    int16_t halfWidth = maxInt16(1, (int16_t)roundf(
-      (baseHalfWidth + (shoulderHalfWidth - baseHalfWidth) * expansion) *
-      tail));
-    int16_t centreDrift = (int16_t)roundf(tipDrift * amount +
-      sinf(now * 0.023f + row * 0.61f) * 0.35f * amount);
+    int16_t halfWidth = maxInt16(
+        1, (int16_t)roundf((baseHalfWidth +
+                            (shoulderHalfWidth - baseHalfWidth) * expansion) *
+                           tail));
+    int16_t centreDrift = (int16_t)roundf(
+        tipDrift * amount + sinf(now * 0.023f + row * 0.61f) * 0.35f * amount);
     int16_t edgeVariation =
-      amount > 0.55f && ((row + (int16_t)(now / 73U)) % 7 == 0) ? 1 : 0;
+        amount > 0.55f && ((row + (int16_t)(now / 73U)) % 7 == 0) ? 1 : 0;
     drawPitchedHLine(centreX + centreDrift - halfWidth, nozzleY + row,
-                     halfWidth * 2 + 1 + edgeVariation,
-                     transform, C_RED);
+                     halfWidth * 2 + 1 + edgeVariation, transform, C_RED);
   }
 
   int16_t middleLength = maxInt16(4, (int16_t)roundf(outerLength * 0.80f));
-  int16_t middleShoulder = maxInt16(1, (int16_t)roundf(
-    shoulderHalfWidth * 0.62f));
+  int16_t middleShoulder =
+      maxInt16(1, (int16_t)roundf(shoulderHalfWidth * 0.62f));
   for (int16_t row = 0; row <= middleLength; row++) {
     float amount = (float)row / maxFloat(1.0f, (float)middleLength);
     float expansion = smoothStep(0.0f, 0.52f, amount);
     float tail = 1.0f - 0.92f * smoothStep(0.68f, 1.0f, amount);
-    int16_t halfWidth = maxInt16(1, (int16_t)roundf(
-      (baseHalfWidth + (middleShoulder - baseHalfWidth) * expansion) * tail));
+    int16_t halfWidth = maxInt16(
+        1, (int16_t)roundf(
+               (baseHalfWidth + (middleShoulder - baseHalfWidth) * expansion) *
+               tail));
     int16_t centreDrift = (int16_t)roundf(tipDrift * amount * 0.45f);
     drawPitchedHLine(centreX + centreDrift - halfWidth, nozzleY + row,
                      halfWidth * 2 + 1, transform, C_ORANGE);
@@ -2744,11 +2693,11 @@ static void drawEngineFlame(const StageGeometry &activeGeometry,
   for (int16_t row = 0; row < coreLength; row++) {
     float amount = (float)row / maxFloat(1.0f, (float)(coreLength - 1));
     float diamond = fabsf(sinf(amount * 2.0f * 3.1415926f));
-    int16_t halfWidth = maxInt16(0, (int16_t)roundf(
-      (1.0f - amount) * coreShoulder * (0.55f + diamond * 0.45f)));
-    drawPitchedHLine(centreX - halfWidth, nozzleY + row,
-                     halfWidth * 2 + 1, transform,
-                     amount < 0.62f ? C_WHITE : C_YELLOW);
+    int16_t halfWidth =
+        maxInt16(0, (int16_t)roundf((1.0f - amount) * coreShoulder *
+                                    (0.55f + diamond * 0.45f)));
+    drawPitchedHLine(centreX - halfWidth, nozzleY + row, halfWidth * 2 + 1,
+                     transform, amount < 0.62f ? C_WHITE : C_YELLOW);
   }
 }
 
@@ -2767,8 +2716,7 @@ static void updateRocketBounds(RocketGeometry &geometry, bool engineOn) {
   float bottomMargin = 7.0f * geometry.visualScale;
   if (engineOn && geometry.stageCount > 0) {
     // Covers the longest permitted flame envelope, including pitch offset.
-    bottomMargin += maximumStageWidth * 0.70f +
-                    22.0f * geometry.visualScale;
+    bottomMargin += maximumStageWidth * 0.70f + 22.0f * geometry.visualScale;
   }
 
   float totalHeight = geometry.bottomY - geometry.noseY + bottomMargin;
@@ -2777,8 +2725,7 @@ static void updateRocketBounds(RocketGeometry &geometry, bool engineOn) {
 
   geometry.setBoundingBox(left - sideMargin,
                           geometry.noseY - 3.0f * geometry.visualScale,
-                          right + sideMargin,
-                          geometry.bottomY + bottomMargin);
+                          right + sideMargin, geometry.bottomY + bottomMargin);
 }
 
 static void drawRocketComponents(const MissionDefinition &mission,
@@ -2834,15 +2781,14 @@ static void drawRotatedRocketLayer(float pivotX, float pivotY, float angle) {
   }
 
   PointF corners[4] = {
-    rotatePoint(sourceLeft - ROCKET_LAYER_PIVOT_X,
-                sourceTop - ROCKET_LAYER_PIVOT_Y, pivotX, pivotY, angle),
-    rotatePoint(sourceRight - ROCKET_LAYER_PIVOT_X,
-                sourceTop - ROCKET_LAYER_PIVOT_Y, pivotX, pivotY, angle),
-    rotatePoint(sourceRight - ROCKET_LAYER_PIVOT_X,
-                sourceBottom - ROCKET_LAYER_PIVOT_Y, pivotX, pivotY, angle),
-    rotatePoint(sourceLeft - ROCKET_LAYER_PIVOT_X,
-                sourceBottom - ROCKET_LAYER_PIVOT_Y, pivotX, pivotY, angle)
-  };
+      rotatePoint(sourceLeft - ROCKET_LAYER_PIVOT_X,
+                  sourceTop - ROCKET_LAYER_PIVOT_Y, pivotX, pivotY, angle),
+      rotatePoint(sourceRight - ROCKET_LAYER_PIVOT_X,
+                  sourceTop - ROCKET_LAYER_PIVOT_Y, pivotX, pivotY, angle),
+      rotatePoint(sourceRight - ROCKET_LAYER_PIVOT_X,
+                  sourceBottom - ROCKET_LAYER_PIVOT_Y, pivotX, pivotY, angle),
+      rotatePoint(sourceLeft - ROCKET_LAYER_PIVOT_X,
+                  sourceBottom - ROCKET_LAYER_PIVOT_Y, pivotX, pivotY, angle)};
 
   float minimumX = corners[0].x;
   float maximumX = corners[0].x;
@@ -2856,11 +2802,9 @@ static void drawRotatedRocketLayer(float pivotX, float pivotY, float angle) {
   }
 
   int16_t screenLeft = maxInt16(0, (int16_t)floorf(minimumX) - 1);
-  int16_t screenRight = minInt16(
-    SCREEN_W - 1, (int16_t)ceilf(maximumX) + 1);
+  int16_t screenRight = minInt16(SCREEN_W - 1, (int16_t)ceilf(maximumX) + 1);
   int16_t screenTop = maxInt16(0, (int16_t)floorf(minimumY) - 1);
-  int16_t screenBottom = minInt16(
-    SCREEN_H - 1, (int16_t)ceilf(maximumY) + 1);
+  int16_t screenBottom = minInt16(SCREEN_H - 1, (int16_t)ceilf(maximumY) + 1);
   float cosine = cosf(angle);
   float sine = sinf(angle);
   uint16_t *framePixels = frame.getBuffer();
@@ -2870,10 +2814,8 @@ static void drawRotatedRocketLayer(float pivotX, float pivotY, float angle) {
   for (int16_t screenY = screenTop; screenY <= screenBottom; screenY++) {
     float deltaX = screenLeft - pivotX;
     float deltaY = screenY - pivotY;
-    float sourceX =
-      ROCKET_LAYER_PIVOT_X + deltaX * cosine + deltaY * sine;
-    float sourceY =
-      ROCKET_LAYER_PIVOT_Y - deltaX * sine + deltaY * cosine;
+    float sourceX = ROCKET_LAYER_PIVOT_X + deltaX * cosine + deltaY * sine;
+    float sourceY = ROCKET_LAYER_PIVOT_Y - deltaX * sine + deltaY * cosine;
 
     for (int16_t screenX = screenLeft; screenX <= screenRight; screenX++) {
       int16_t sampledX = (int16_t)roundf(sourceX);
@@ -2903,15 +2845,13 @@ static void drawRocket(const MissionDefinition &mission,
 
   float pivotX = geometry.payloadX + geometry.payloadWidth * 0.5f;
   float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
-  RocketTransform transform = {
-    pivotX, pivotY, geometry.pitchRadians
-  };
+  RocketTransform transform = {pivotX, pivotY, geometry.pitchRadians};
 
   if (fabsf(geometry.pitchRadians) < 0.001f ||
       rocketLayer.getBuffer() == nullptr) {
     rocketRenderTarget = &frame;
-    drawRocketComponents(mission, geometry, activeStage, activeFuel,
-                         engineOn, now, transform);
+    drawRocketComponents(mission, geometry, activeStage, activeFuel, engineOn,
+                         now, transform);
     return;
   }
 
@@ -2929,9 +2869,8 @@ static void drawRocket(const MissionDefinition &mission,
 
   rocketLayer.fillScreen(0);
   rocketRenderTarget = &rocketLayer;
-  RocketTransform localTransform = {
-    (float)ROCKET_LAYER_PIVOT_X, (float)ROCKET_LAYER_PIVOT_Y, 0.0f
-  };
+  RocketTransform localTransform = {(float)ROCKET_LAYER_PIVOT_X,
+                                    (float)ROCKET_LAYER_PIVOT_Y, 0.0f};
   drawRocketComponents(mission, localGeometry, activeStage, activeFuel,
                        engineOn, now, localTransform);
   rocketRenderTarget = &frame;
@@ -2956,25 +2895,22 @@ static void createWholeDetachedStage(const StageDefinition &definition,
                                      float fuelFraction,
                                      const RocketTransform &transform) {
   int16_t bandPosition =
-    maxInt16((int16_t)5, (int16_t)(geometry.height / 5.0f));
+      maxInt16((int16_t)5, (int16_t)(geometry.height / 5.0f));
   float side = randomGenerator.chance(0.5f) ? -1.0f : 1.0f;
-  PointF centre = transform.apply(
-    geometry.x + geometry.width * 0.5f,
-    geometry.y + geometry.height * 0.5f);
+  PointF centre = transform.apply(geometry.x + geometry.width * 0.5f,
+                                  geometry.y + geometry.height * 0.5f);
 
   Fragment *stage = createFragment(
-    FragmentType::WHOLE_STAGE,
-    centre.x, centre.y,
-    geometry.width, geometry.height,
-    side * randomGenerator.range(6.0f, 11.0f), 0.0f,
-    transform.angle, side * randomGenerator.range(0.28f, 0.52f), 5.2f,
-    definition.bandColour, fuelFraction, (int8_t)bandPosition);
+      FragmentType::WHOLE_STAGE, centre.x, centre.y, geometry.width,
+      geometry.height, side * randomGenerator.range(6.0f, 11.0f), 0.0f,
+      transform.angle, side * randomGenerator.range(0.28f, 0.52f), 5.2f,
+      definition.bandColour, fuelFraction, (int8_t)bandPosition);
 
   float physicalScale = maxFloat(0.65f, currentRocketVisualScale());
   float physicalWidth = geometry.width / physicalScale;
   float physicalHeight = geometry.height / physicalScale;
-  stage->mass = maxFloat(
-    1.0f, physicalWidth * physicalWidth * physicalHeight * 0.0024f);
+  stage->mass =
+      maxFloat(1.0f, physicalWidth * physicalWidth * physicalHeight * 0.0024f);
   stage->minimumDragArea = physicalWidth * physicalWidth;
   stage->maximumDragArea = physicalWidth * physicalHeight;
 
@@ -2998,11 +2934,9 @@ static void beginExplosion(const char *reason) {
 
   float pivotX = geometry.payloadX + geometry.payloadWidth * 0.5f;
   float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
-  RocketTransform transform = {
-    pivotX, pivotY, geometry.pitchRadians
-  };
+  RocketTransform transform = {pivotX, pivotY, geometry.pitchRadians};
   float localExplosionY =
-    geometry.noseY + (geometry.bottomY - geometry.noseY) * 0.62f;
+      geometry.noseY + (geometry.bottomY - geometry.noseY) * 0.62f;
   PointF explosion = transform.apply(pivotX, localExplosionY);
   game.explosionX = explosion.x;
   game.explosionY = explosion.y;
@@ -3019,27 +2953,27 @@ static void beginExplosion(const char *reason) {
   game.flash = 1.0f;
   game.shake = 10.0f;
 
-  PointF capsuleCentre = transform.apply(
-    geometry.payloadX + geometry.payloadWidth * 0.5f,
-    geometry.payloadY + geometry.payloadHeight * 0.5f);
-  createFragment(
-    FragmentType::CAPSULE, capsuleCentre.x, capsuleCentre.y, geometry.payloadWidth,
-    geometry.payloadHeight, randomGenerator.range(-48.0f, 48.0f),
-    randomGenerator.range(-92.0f, -34.0f),
-    geometry.pitchRadians + randomGenerator.range(-0.25f, 0.25f),
-    randomGenerator.range(-4.4f, 4.4f),
-    3.7f, currentMission().recoverCapsule ? C_CYAN : C_PURPLE, 0.0f, -1);
+  PointF capsuleCentre =
+      transform.apply(geometry.payloadX + geometry.payloadWidth * 0.5f,
+                      geometry.payloadY + geometry.payloadHeight * 0.5f);
+  createFragment(FragmentType::CAPSULE, capsuleCentre.x, capsuleCentre.y,
+                 geometry.payloadWidth, geometry.payloadHeight,
+                 randomGenerator.range(-48.0f, 48.0f),
+                 randomGenerator.range(-92.0f, -34.0f),
+                 geometry.pitchRadians + randomGenerator.range(-0.25f, 0.25f),
+                 randomGenerator.range(-4.4f, 4.4f), 3.7f,
+                 currentMission().recoverCapsule ? C_CYAN : C_PURPLE, 0.0f, -1);
 
   for (uint8_t geometryIndex = 0; geometryIndex < geometry.stageCount;
        geometryIndex++) {
     const StageGeometry &stageGeometry = geometry.stages[geometryIndex];
 
     const StageDefinition &definition =
-      currentMission().stages[stageGeometry.sourceIndex];
+        currentMission().stages[stageGeometry.sourceIndex];
 
     float stageFuel = stageGeometry.sourceIndex == game.activeStage
-                        ? currentFuelFraction()
-                        : 1.0f;
+                          ? currentFuelFraction()
+                          : 1.0f;
 
     static constexpr uint8_t SLICE_COUNT = 3;
 
@@ -3052,7 +2986,7 @@ static void beginExplosion(const char *reason) {
 
       float sliceCentreY = stageGeometry.y + sliceTop + sliceHeight * 0.5f;
       PointF sliceCentre = transform.apply(
-        stageGeometry.x + stageGeometry.width * 0.5f, sliceCentreY);
+          stageGeometry.x + stageGeometry.width * 0.5f, sliceCentreY);
 
       int8_t localBand = -1;
 
@@ -3076,43 +3010,38 @@ static void beginExplosion(const char *reason) {
 
       float force = randomGenerator.range(38.0f, 86.0f);
 
-      createFragment(FragmentType::STAGE_SLICE,
-                     sliceCentre.x, sliceCentre.y,
-                     stageGeometry.width, sliceHeight - 1.0f,
-                     radialX * force + randomGenerator.range(-32.0f, 32.0f),
-                     radialY * force + randomGenerator.range(-42.0f, 22.0f),
-                     geometry.pitchRadians +
-                       randomGenerator.range(-0.18f, 0.18f),
-                     randomGenerator.range(-5.2f, 5.2f),
-                     randomGenerator.range(3.0f, 4.2f), definition.bandColour,
-                     stageFuel, localBand);
+      createFragment(
+          FragmentType::STAGE_SLICE, sliceCentre.x, sliceCentre.y,
+          stageGeometry.width, sliceHeight - 1.0f,
+          radialX * force + randomGenerator.range(-32.0f, 32.0f),
+          radialY * force + randomGenerator.range(-42.0f, 22.0f),
+          geometry.pitchRadians + randomGenerator.range(-0.18f, 0.18f),
+          randomGenerator.range(-5.2f, 5.2f), randomGenerator.range(3.0f, 4.2f),
+          definition.bandColour, stageFuel, localBand);
     }
 
     for (uint8_t side = 0; side < 2; side++) {
       float sideDirection = side == 0 ? -1.0f : 1.0f;
-      float panelY = stageGeometry.y + stageGeometry.height *
-        randomGenerator.range(0.25f, 0.75f);
+      float panelY = stageGeometry.y +
+                     stageGeometry.height * randomGenerator.range(0.25f, 0.75f);
       PointF panelCentre = transform.apply(
-        stageGeometry.x + stageGeometry.width *
-          (side == 0 ? 0.12f : 0.88f),
-        panelY);
+          stageGeometry.x + stageGeometry.width * (side == 0 ? 0.12f : 0.88f),
+          panelY);
 
-      createFragment(
-        FragmentType::SIDE_PANEL,
-        panelCentre.x, panelCentre.y,
-        4.0f, stageGeometry.height * randomGenerator.range(0.28f, 0.52f),
-        sideDirection * randomGenerator.range(55.0f, 105.0f),
-        randomGenerator.range(-72.0f, 35.0f), geometry.pitchRadians,
-        randomGenerator.range(-7.0f, 7.0f), 2.8f, definition.bandColour, 0.0f,
-        -1);
+      createFragment(FragmentType::SIDE_PANEL, panelCentre.x, panelCentre.y,
+                     4.0f,
+                     stageGeometry.height * randomGenerator.range(0.28f, 0.52f),
+                     sideDirection * randomGenerator.range(55.0f, 105.0f),
+                     randomGenerator.range(-72.0f, 35.0f),
+                     geometry.pitchRadians, randomGenerator.range(-7.0f, 7.0f),
+                     2.8f, definition.bandColour, 0.0f, -1);
     }
 
-    EngineGeometry engine = engineGeometryFor(stageGeometry,
-                                               geometry.visualScale);
-    PointF engineCentre = transform.apply(
-      engine.centreX, (engine.topY + engine.nozzleY) * 0.5f);
-    createFragment(FragmentType::ENGINE,
-                   engineCentre.x, engineCentre.y,
+    EngineGeometry engine =
+        engineGeometryFor(stageGeometry, geometry.visualScale);
+    PointF engineCentre =
+        transform.apply(engine.centreX, (engine.topY + engine.nozzleY) * 0.5f);
+    createFragment(FragmentType::ENGINE, engineCentre.x, engineCentre.y,
                    engine.exitWidth, engine.nozzleY - engine.topY,
                    randomGenerator.range(-70.0f, 70.0f),
                    randomGenerator.range(-40.0f, 70.0f), 0.0f,
@@ -3135,12 +3064,12 @@ static void separateCurrentStage() {
     return;
   }
 
-  float burnSeconds = flightTiming.stageBurnSeconds(
-    currentMission(), game.activeStage);
+  float burnSeconds =
+      flightTiming.stageBurnSeconds(currentMission(), game.activeStage);
   float progress = game.stageElapsed / maxFloat(0.01f, burnSeconds);
   float lateSeconds = maxFloat(0.0f, game.stageElapsed - burnSeconds);
-  float lateGrace = flightTiming.lateGraceSeconds(
-    currentMission(), game.activeStage);
+  float lateGrace =
+      flightTiming.lateGraceSeconds(currentMission(), game.activeStage);
 
   if (lateSeconds > lateGrace) {
     beginExplosion("STAGE RUPTURE");
@@ -3155,18 +3084,15 @@ static void separateCurrentStage() {
   }
 
   const StageGeometry &activeGeometry =
-    geometry.stages[geometry.stageCount - 1];
+      geometry.stages[geometry.stageCount - 1];
 
   float remainingFuel = clamp01(1.0f - progress);
 
   float pivotX = geometry.payloadX + geometry.payloadWidth * 0.5f;
   float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
-  RocketTransform transform = {
-    pivotX, pivotY, geometry.pitchRadians
-  };
-  PointF seam = transform.apply(
-    activeGeometry.x + activeGeometry.width * 0.5f,
-    activeGeometry.y);
+  RocketTransform transform = {pivotX, pivotY, geometry.pitchRadians};
+  PointF seam = transform.apply(activeGeometry.x + activeGeometry.width * 0.5f,
+                                activeGeometry.y);
 
   spawnSparkBurst(seam.x, seam.y, 15, C_GREEN);
   spawnSmokeBurst(seam.x, seam.y + 2.0f, 7, 17.0f);
@@ -3175,7 +3101,8 @@ static void separateCurrentStage() {
   uint8_t separatedStage = game.activeStage + 1;
 
   if (progress < 0.65f) {
-    snprintf(stageFeedback, sizeof(stageFeedback), "S%u TOO EARLY", separatedStage);
+    snprintf(stageFeedback, sizeof(stageFeedback), "S%u TOO EARLY",
+             separatedStage);
     setFeedback(stageFeedback, C_RED, 1.05f);
     game.velocity *= 0.52f;
     game.score = game.score > 120 ? game.score - 120 : 0;
@@ -3193,7 +3120,8 @@ static void separateCurrentStage() {
     game.score += 300;
     game.shake = 5.0f;
   } else if (lateSeconds <= 0.18f) {
-    snprintf(stageFeedback, sizeof(stageFeedback), "S%u PERFECT", separatedStage);
+    snprintf(stageFeedback, sizeof(stageFeedback), "S%u PERFECT",
+             separatedStage);
     setFeedback(stageFeedback, C_GREEN, 1.08f);
     game.velocity *= 0.995f;
     game.score += 600;
@@ -3216,8 +3144,10 @@ static void separateCurrentStage() {
 
   // Keep the surviving hardware continuous, then smoothly move its new visual
   // centre back to the pre-separation tracking position.
-  float remainingHeight = remainingRocketHeight(currentMission(), game.activeStage);
-  float previousHeight = remainingRocketHeight(currentMission(), game.activeStage - 1);
+  float remainingHeight =
+      remainingRocketHeight(currentMission(), game.activeStage);
+  float previousHeight =
+      remainingRocketHeight(currentMission(), game.activeStage - 1);
   game.centeringTarget += (previousHeight - remainingHeight) * 0.5f;
 
   if (game.activeStage >= currentMission().stageCount) {
@@ -3232,16 +3162,15 @@ static void separateCurrentStage() {
 
     if (nextGeometry.stageCount > 0) {
       const StageGeometry &newActive =
-        nextGeometry.stages[nextGeometry.stageCount - 1];
+          nextGeometry.stages[nextGeometry.stageCount - 1];
 
-      EngineGeometry engine = engineGeometryFor(
-        newActive, nextGeometry.visualScale);
+      EngineGeometry engine =
+          engineGeometryFor(newActive, nextGeometry.visualScale);
       float nextPivotX =
-        nextGeometry.payloadX + nextGeometry.payloadWidth * 0.5f;
+          nextGeometry.payloadX + nextGeometry.payloadWidth * 0.5f;
       float nextPivotY = (nextGeometry.noseY + nextGeometry.bottomY) * 0.5f;
-      RocketTransform nextTransform = {
-        nextPivotX, nextPivotY, nextGeometry.pitchRadians
-      };
+      RocketTransform nextTransform = {nextPivotX, nextPivotY,
+                                       nextGeometry.pitchRadians};
       PointF nozzle = nextTransform.apply(engine.centreX, engine.nozzleY);
 
       spawnFireBurst(nozzle.x, nozzle.y, 11, 30.0f);
@@ -3318,8 +3247,7 @@ static void startMission() {
   // Track the complete stack by its visual centre, not by a fixed nose
   // displacement. This gives two-, three- and four-stage rockets the same
   // upper-middle composition while preserving their launch-pad position.
-  game.trackingNoseY =
-    ROCKET_BODY_TRACKING_CENTRE_Y - completeHeight * 0.5f;
+  game.trackingNoseY = ROCKET_BODY_TRACKING_CENTRE_Y - completeHeight * 0.5f;
 
   if (game.trackingNoseY < 24.0f) {
     game.trackingNoseY = 24.0f;
@@ -3378,63 +3306,60 @@ static void spawnContinuousEngineEffects(const RocketGeometry &geometry) {
   }
 
   const StageGeometry &activeGeometry =
-    geometry.stages[geometry.stageCount - 1];
+      geometry.stages[geometry.stageCount - 1];
   float scale = geometry.visualScale;
   EngineGeometry engine = engineGeometryFor(activeGeometry, scale);
   float nozzleX = engine.centreX;
   float nozzleY = engine.nozzleY;
   float pivotX = geometry.payloadX + geometry.payloadWidth * 0.5f;
   float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
-  RocketTransform transform = {
-    pivotX, pivotY, geometry.pitchRadians
-  };
+  RocketTransform transform = {pivotX, pivotY, geometry.pitchRadians};
   PointF nozzle = transform.apply(nozzleX, nozzleY);
   nozzleX = nozzle.x;
   nozzleY = nozzle.y;
-  float spaceAmount = smoothStep(35.0f, 150.0f,
-                                 displayedAltitudeAt(game.altitude));
+  float spaceAmount =
+      smoothStep(35.0f, 150.0f, displayedAltitudeAt(game.altitude));
   float inheritedScreenVelocity =
-    -maxFloat(0.0f, game.velocity) * WORLD_PIXELS_PER_ALTITUDE;
+      -maxFloat(0.0f, game.velocity) * WORLD_PIXELS_PER_ALTITUDE;
   float exhaustAxisX = -tanf(geometry.pitchRadians);
 
   if (spaceAmount < 0.72f &&
       randomGenerator.chance(0.72f - spaceAmount * 0.75f)) {
     float exhaustSpeed = randomGenerator.range(19.0f, 30.0f);
     spawnParticle(
-      ParticleType::FIRE,
-      nozzleX + randomGenerator.range(-0.16f, 0.16f) * engine.exitWidth,
-      nozzleY + randomGenerator.range(1.0f, 3.0f) * scale,
-      exhaustAxisX * exhaustSpeed +
-        randomGenerator.range(-5.0f, 5.0f) * (1.0f - spaceAmount * 0.35f),
-      inheritedScreenVelocity + exhaustSpeed,
-      randomGenerator.range(0.09f, 0.17f),
-      randomGenerator.range(0.8f, 1.4f) * scale,
-      randomGenerator.chance(0.55f) ? C_YELLOW : C_ORANGE);
+        ParticleType::FIRE,
+        nozzleX + randomGenerator.range(-0.16f, 0.16f) * engine.exitWidth,
+        nozzleY + randomGenerator.range(1.0f, 3.0f) * scale,
+        exhaustAxisX * exhaustSpeed +
+            randomGenerator.range(-5.0f, 5.0f) * (1.0f - spaceAmount * 0.35f),
+        inheritedScreenVelocity + exhaustSpeed,
+        randomGenerator.range(0.09f, 0.17f),
+        randomGenerator.range(0.8f, 1.4f) * scale,
+        randomGenerator.chance(0.55f) ? C_YELLOW : C_ORANGE);
   }
 
   if (spaceAmount < 0.70f &&
       randomGenerator.chance((1.0f - spaceAmount) * 0.58f)) {
     float exhaustSpeed = randomGenerator.range(13.0f, 23.0f);
-    spawnParticle(ParticleType::SMOKE,
-                  nozzleX + randomGenerator.range(-0.28f, 0.28f) *
-                    engine.exitWidth,
-                  nozzleY + scaledSize(4.0f, scale),
-                  exhaustAxisX * exhaustSpeed +
-                    randomGenerator.range(-7.0f, 7.0f),
-                  inheritedScreenVelocity + exhaustSpeed,
-                  randomGenerator.range(0.28f, 0.58f),
-                  randomGenerator.range(1.4f, 2.6f) * scale, C_SMOKE);
+    spawnParticle(
+        ParticleType::SMOKE,
+        nozzleX + randomGenerator.range(-0.28f, 0.28f) * engine.exitWidth,
+        nozzleY + scaledSize(4.0f, scale),
+        exhaustAxisX * exhaustSpeed + randomGenerator.range(-7.0f, 7.0f),
+        inheritedScreenVelocity + exhaustSpeed,
+        randomGenerator.range(0.28f, 0.58f),
+        randomGenerator.range(1.4f, 2.6f) * scale, C_SMOKE);
   }
 
   if (game.altitude < 12.0f) {
     float padY = 274.0f + game.cameraAltitude * WORLD_PIXELS_PER_ALTITUDE;
     spawnParticle(
-      ParticleType::SMOKE, 86.0f + randomGenerator.range(-28.0f, 28.0f),
-      padY + randomGenerator.range(-2.0f, 10.0f),
-      randomGenerator.range(-40.0f, 40.0f),
-      randomGenerator.range(-8.0f, 14.0f), randomGenerator.range(0.8f, 1.8f),
-      randomGenerator.range(3.0f, 6.0f),
-      randomGenerator.chance(0.5f) ? C_SMOKE : C_SMOKE_DARK);
+        ParticleType::SMOKE, 86.0f + randomGenerator.range(-28.0f, 28.0f),
+        padY + randomGenerator.range(-2.0f, 10.0f),
+        randomGenerator.range(-40.0f, 40.0f),
+        randomGenerator.range(-8.0f, 14.0f), randomGenerator.range(0.8f, 1.8f),
+        randomGenerator.range(3.0f, 6.0f),
+        randomGenerator.chance(0.5f) ? C_SMOKE : C_SMOKE_DARK);
   }
 }
 
@@ -3473,7 +3398,8 @@ static void updateCentering(float deltaSeconds) {
 
   float centeringSpeed = 12.0f;
   float followAmount = 1.0f - expf(-centeringSpeed * deltaSeconds);
-  float newOffset = lerpFloat(game.centeringOffset, game.centeringTarget, followAmount);
+  float newOffset =
+      lerpFloat(game.centeringOffset, game.centeringTarget, followAmount);
 
   float delta = newOffset - game.centeringOffset;
   game.centeringOffset = newOffset;
@@ -3521,10 +3447,10 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
     } else {
       float previousElapsed = game.stageElapsed;
       float nextElapsed = previousElapsed + deltaSeconds;
-      float burnSeconds = flightTiming.stageBurnSeconds(
-        currentMission(), game.activeStage);
+      float burnSeconds =
+          flightTiming.stageBurnSeconds(currentMission(), game.activeStage);
       float poweredSeconds =
-        clampFloat(burnSeconds - previousElapsed, 0.0f, deltaSeconds);
+          clampFloat(burnSeconds - previousElapsed, 0.0f, deltaSeconds);
       float unpoweredSeconds = deltaSeconds - poweredSeconds;
 
       if (poweredSeconds > 0.0f) {
@@ -3537,16 +3463,15 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
       if (unpoweredSeconds > 0.0f) {
         float gravity = gravityAtAltitude(game.altitude);
         game.velocity -= gravity * unpoweredSeconds;
-        game.altitude = maxFloat(0.0f,
-          game.altitude + game.velocity * unpoweredSeconds);
+        game.altitude =
+            maxFloat(0.0f, game.altitude + game.velocity * unpoweredSeconds);
       }
 
       game.stageElapsed = nextElapsed;
-      game.score += (int32_t)(maxFloat(0.0f, game.velocity) *
-                              deltaSeconds * 57.0f);
+      game.score +=
+          (int32_t)(maxFloat(0.0f, game.velocity) * deltaSeconds * 57.0f);
 
-      if (!game.stageBurnoutCueShown &&
-          previousElapsed < burnSeconds &&
+      if (!game.stageBurnoutCueShown && previousElapsed < burnSeconds &&
           nextElapsed >= burnSeconds) {
         game.stageBurnoutCueShown = true;
         setFeedback("SEPARATE NOW", C_YELLOW, 0.85f);
@@ -3554,8 +3479,8 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
       }
 
       if (game.stageElapsed >
-          burnSeconds + flightTiming.lateGraceSeconds(
-            currentMission(), game.activeStage)) {
+          burnSeconds + flightTiming.lateGraceSeconds(currentMission(),
+                                                      game.activeStage)) {
         beginExplosion("ENGINE RUPTURE");
         emitEngineEffects = false;
       }
@@ -3586,22 +3511,22 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
     }
   } else if (game.phase == FlightPhase::REENTRY) {
     float recoveryDisplayAltitude =
-      minFloat(28.0f, missionDisplayTargetAltitude() * 0.36f);
-    float recoveryInternalAltitude =
-      currentMission().targetAltitude * recoveryDisplayAltitude /
-      missionDisplayTargetAltitude();
-    float descentDistance = maxFloat(
-      1.0f, game.transitionStartAltitude - recoveryInternalAltitude);
-    float progress = clamp01(
-      (game.transitionStartAltitude - game.altitude) / descentDistance);
-    float descentRate = lerpFloat(0.18f, 0.32f,
-                                  smoothStep(0.08f, 0.88f, progress));
+        minFloat(28.0f, missionDisplayTargetAltitude() * 0.36f);
+    float recoveryInternalAltitude = currentMission().targetAltitude *
+                                     recoveryDisplayAltitude /
+                                     missionDisplayTargetAltitude();
+    float descentDistance =
+        maxFloat(1.0f, game.transitionStartAltitude - recoveryInternalAltitude);
+    float progress = clamp01((game.transitionStartAltitude - game.altitude) /
+                             descentDistance);
+    float descentRate =
+        lerpFloat(0.18f, 0.32f, smoothStep(0.08f, 0.88f, progress));
     float desiredVelocity = -currentMission().targetAltitude * descentRate;
     float velocityFollow = 1.0f - expf(-3.2f * deltaSeconds);
 
     game.velocity = lerpFloat(game.velocity, desiredVelocity, velocityFollow);
     game.altitude = maxFloat(recoveryInternalAltitude,
-      game.altitude + game.velocity * deltaSeconds);
+                             game.altitude + game.velocity * deltaSeconds);
     game.cameraAltitude = game.altitude;
     game.previousCameraAltitude = game.cameraAltitude;
     game.reentryHeat = sinf(smoothStep(0.04f, 0.96f, progress) * 3.1415926f);
@@ -3613,16 +3538,16 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
       game.transitionStartAltitude = game.altitude;
       // This deceleration begins with the now-immediate pilot-chute visual;
       // reentry itself no longer eases down before deployment is visible.
-      game.velocity = maxFloat(game.velocity,
-                               -game.transitionStartAltitude * 0.24f);
+      game.velocity =
+          maxFloat(game.velocity, -game.transitionStartAltitude * 0.24f);
       game.parachuteOpen = 0.0f;
       game.reentryHeat = 0.0f;
       setPhase(FlightPhase::RECOVERY);
     }
   } else if (game.phase == FlightPhase::DESCENDING) {
     game.velocity -= gravityAtAltitude(game.altitude) * deltaSeconds;
-    game.altitude = maxFloat(0.0f,
-      game.altitude + game.velocity * deltaSeconds);
+    game.altitude =
+        maxFloat(0.0f, game.altitude + game.velocity * deltaSeconds);
 
     if (phaseSeconds >= 2.8f) {
       saveMissionProgress();
@@ -3631,8 +3556,8 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
   } else if (game.phase == FlightPhase::EXPLOSION) {
     if (phaseSeconds < 0.95f && randomGenerator.chance(0.72f)) {
       spawnFireBurst(game.explosionX + randomGenerator.range(-8.0f, 8.0f),
-                     game.explosionY + randomGenerator.range(-10.0f, 12.0f),
-                     2, 28.0f);
+                     game.explosionY + randomGenerator.range(-10.0f, 12.0f), 2,
+                     28.0f);
     }
 
     if (phaseSeconds < 1.45f && randomGenerator.chance(0.55f)) {
@@ -3664,12 +3589,12 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
     // The parachute arrests the world-space descent as the ground and daytime
     // sky continue to approach. Screen-space capsule motion remains gentle.
     float desiredVelocity = -game.transitionStartAltitude *
-      lerpFloat(0.24f, 0.09f, game.parachuteOpen);
-    float velocityFollow = 1.0f - expf(
-      -(2.0f + game.parachuteOpen * 3.0f) * deltaSeconds);
+                            lerpFloat(0.24f, 0.09f, game.parachuteOpen);
+    float velocityFollow =
+        1.0f - expf(-(2.0f + game.parachuteOpen * 3.0f) * deltaSeconds);
     game.velocity = lerpFloat(game.velocity, desiredVelocity, velocityFollow);
-    game.altitude = maxFloat(0.0f,
-      game.altitude + game.velocity * deltaSeconds);
+    game.altitude =
+        maxFloat(0.0f, game.altitude + game.velocity * deltaSeconds);
     game.cameraAltitude = game.altitude;
     game.previousCameraAltitude = game.cameraAltitude;
 
@@ -3692,8 +3617,8 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
   }
 
   game.maximumAltitude = maxFloat(game.maximumAltitude, game.altitude);
-  game.feedbackRemaining = maxFloat(0.0f,
-                                    game.feedbackRemaining - deltaSeconds);
+  game.feedbackRemaining =
+      maxFloat(0.0f, game.feedbackRemaining - deltaSeconds);
   game.shake = maxFloat(0.0f, game.shake - deltaSeconds * 10.0f);
   game.flash = maxFloat(0.0f, game.flash - deltaSeconds * 1.8f);
 
@@ -3843,8 +3768,8 @@ static void drawShockwave() {
 // =============================================================================
 
 static void drawRecoveryClouds(float elapsed, uint32_t now) {
-  static const int16_t CLOUD_X[] = { 18, 69, 132, 37, 108, 158 };
-  static const int16_t CLOUD_Y[] = { 72, 142, 215, 286, 355, 420 };
+  static const int16_t CLOUD_X[] = {18, 69, 132, 37, 108, 158};
+  static const int16_t CLOUD_Y[] = {72, 142, 215, 286, 355, 420};
 
   for (uint8_t index = 0; index < 6; index++) {
     float speed = 17.0f + (index % 3) * 7.0f;
@@ -3872,17 +3797,17 @@ static void drawRecoveryScreen(uint32_t now) {
   float canopyOpen = game.parachuteOpen;
 
   if (lineOpen > 0.02f) {
-    int16_t lineTopY = (int16_t)roundf(capsuleY -
-      lerpFloat(7.0f, 30.0f, lineOpen));
+    int16_t lineTopY =
+        (int16_t)roundf(capsuleY - lerpFloat(7.0f, 30.0f, lineOpen));
     int16_t lineHalfWidth = (int16_t)roundf(16.0f * canopyOpen + 3.0f);
-    uint16_t lineColour = blend565(C_MUTED, C_WHITE,
-                                    (uint8_t)(lineOpen * 190.0f));
-    frame.drawLine(centreX - lineHalfWidth, lineTopY,
-                   centreX - 6, (int16_t)capsuleY + 8, lineColour);
-    frame.drawLine(centreX + lineHalfWidth, lineTopY,
-                   centreX + 6, (int16_t)capsuleY + 8, lineColour);
-    frame.drawLine(centreX, lineTopY,
-                   centreX, (int16_t)capsuleY + 8, lineColour);
+    uint16_t lineColour =
+        blend565(C_MUTED, C_WHITE, (uint8_t)(lineOpen * 190.0f));
+    frame.drawLine(centreX - lineHalfWidth, lineTopY, centreX - 6,
+                   (int16_t)capsuleY + 8, lineColour);
+    frame.drawLine(centreX + lineHalfWidth, lineTopY, centreX + 6,
+                   (int16_t)capsuleY + 8, lineColour);
+    frame.drawLine(centreX, lineTopY, centreX, (int16_t)capsuleY + 8,
+                   lineColour);
 
     if (canopyOpen < 0.12f) {
       frame.fillCircle(centreX, lineTopY - 2,
@@ -3898,15 +3823,14 @@ static void drawRecoveryScreen(uint32_t now) {
     for (int16_t row = 0; row <= canopyHeight; row++) {
       float normalY = (float)(row - canopyHeight) / canopyHeight;
       int16_t rowHalfWidth = (int16_t)roundf(
-        halfWidth * sqrtf(maxFloat(0.0f, 1.0f - normalY * normalY)));
-      frame.drawFastHLine(centreX - rowHalfWidth,
-                          canopyY - canopyHeight + row,
+          halfWidth * sqrtf(maxFloat(0.0f, 1.0f - normalY * normalY)));
+      frame.drawFastHLine(centreX - rowHalfWidth, canopyY - canopyHeight + row,
                           rowHalfWidth * 2 + 1, C_RED);
     }
-    frame.drawFastHLine(centreX - canopyWidth / 2, canopyY,
-                        canopyWidth, C565(255, 126, 94));
-    frame.drawLine(centreX, canopyY - canopyHeight,
-                   centreX, canopyY + 1, C565(255, 170, 135));
+    frame.drawFastHLine(centreX - canopyWidth / 2, canopyY, canopyWidth,
+                        C565(255, 126, 94));
+    frame.drawLine(centreX, canopyY - canopyHeight, centreX, canopyY + 1,
+                   C565(255, 170, 135));
   }
 
   RocketGeometry capsuleGeometry = {};
@@ -3916,12 +3840,10 @@ static void drawRecoveryScreen(uint32_t now) {
   capsuleGeometry.payloadHeight = 20;
   capsuleGeometry.noseY = capsuleGeometry.payloadY;
   capsuleGeometry.bottomY =
-    capsuleGeometry.payloadY + capsuleGeometry.payloadHeight;
+      capsuleGeometry.payloadY + capsuleGeometry.payloadHeight;
   RocketTransform capsuleTransform = {
-    (float)centreX,
-    (capsuleGeometry.noseY + capsuleGeometry.bottomY) * 0.5f,
-    0.0f
-  };
+      (float)centreX, (capsuleGeometry.noseY + capsuleGeometry.bottomY) * 0.5f,
+      0.0f};
   drawPayload(capsuleGeometry, true, capsuleTransform);
 
   frame.fillRoundRect(48, 294, 76, 19, 4, C_PANEL);
@@ -3963,21 +3885,20 @@ static void drawReentryEffects(const RocketGeometry &geometry, uint32_t now) {
 
   float pivotX = geometry.payloadX + geometry.payloadWidth * 0.5f;
   float pivotY = (geometry.noseY + geometry.bottomY) * 0.5f;
-  RocketTransform transform = {
-    pivotX, pivotY, geometry.pitchRadians
-  };
+  RocketTransform transform = {pivotX, pivotY, geometry.pitchRadians};
   PointF payloadCentre = transform.apply(
-    pivotX, geometry.payloadY + geometry.payloadHeight * 0.5f);
+      pivotX, geometry.payloadY + geometry.payloadHeight * 0.5f);
   PointF payloadTopPoint = transform.apply(pivotX, geometry.payloadY);
-  PointF payloadBottomPoint = transform.apply(
-    pivotX, geometry.payloadY + geometry.payloadHeight);
+  PointF payloadBottomPoint =
+      transform.apply(pivotX, geometry.payloadY + geometry.payloadHeight);
   int16_t centreX = (int16_t)roundf(payloadCentre.x);
   int16_t payloadTop = (int16_t)roundf(payloadTopPoint.y);
   int16_t bottomY = (int16_t)roundf(payloadBottomPoint.y);
-  int16_t width = maxInt16(4, (int16_t)roundf(
-    geometry.payloadWidth * (0.55f + game.reentryHeat * 0.38f)));
-  int16_t length = maxInt16(8, (int16_t)roundf(
-    10.0f + game.reentryHeat * 20.0f));
+  int16_t width =
+      maxInt16(4, (int16_t)roundf(geometry.payloadWidth *
+                                  (0.55f + game.reentryHeat * 0.38f)));
+  int16_t length =
+      maxInt16(8, (int16_t)roundf(10.0f + game.reentryHeat * 20.0f));
   int16_t flicker = (int16_t)(sinf(now * 0.045f) * 3.0f);
   int16_t wakeTop = payloadTop - length;
 
@@ -3991,12 +3912,11 @@ static void drawReentryEffects(const RocketGeometry &geometry, uint32_t now) {
                    stream == 0 ? C_YELLOW : C_RED);
 
     if (stream >= -1 && stream <= 1) {
-      frame.drawLine(startX + 1, bottomY - 3,
-                     endX + 1, endY + length / 4, C_ORANGE);
+      frame.drawLine(startX + 1, bottomY - 3, endX + 1, endY + length / 4,
+                     C_ORANGE);
     }
   }
-  frame.drawFastHLine(centreX - width, bottomY - 1,
-                      width * 2 + 1, C_YELLOW);
+  frame.drawFastHLine(centreX - width, bottomY - 1, width * 2 + 1, C_YELLOW);
 }
 
 static void drawFlightScreen(uint32_t now) {
@@ -4015,8 +3935,7 @@ static void drawFlightScreen(uint32_t now) {
   drawBackground(cameraDisplayAltitude, earthDisplayAltitude, now,
                  currentMission().flightType, false);
 
-  if (game.phase != FlightPhase::REENTRY &&
-      game.phase != FlightPhase::APOGEE) {
+  if (game.phase != FlightPhase::REENTRY && game.phase != FlightPhase::APOGEE) {
     drawLaunchPad(game.cameraAltitude, now,
                   game.phase == FlightPhase::COUNTDOWN);
   }
@@ -4066,8 +3985,8 @@ static void drawFlightScreen(uint32_t now) {
 static void drawSplashScreen(uint32_t now) {
   uint32_t elapsed = now - game.screenStartedAt;
 
-  drawBackground(0.0f, 0.0f, now,
-                 MISSIONS[game.selectedMission].flightType, false);
+  drawBackground(0.0f, 0.0f, now, MISSIONS[game.selectedMission].flightType,
+                 false);
 
   drawLaunchPad(0.0f, now, elapsed > 650);
 
@@ -4087,14 +4006,15 @@ static void drawSplashScreen(uint32_t now) {
 
   frame.drawRoundRect(11, 28, 150, 85, 10, C_BORDER);
 
-  frame.drawFastVLine(20, 38, 64, C_GREEN);
+  frame.drawFastVLine(20, 38, 64, C_OCEAN_LIGHT);
 
-  drawTextLeft("FLIGHT SYSTEM", 28, 39, 1, C_MUTED);
+  drawTextLeft("TINY CONSOLE", 28, 39, 1, C_MUTED);
 
   drawTextLeft("VOID", 28, 55, 3, C_WHITE);
 
-  drawTextLeft("ASCENT", 28, 83, 2, C_GREEN);
+  drawTextLeft("ASCENT", 28, 83, 2, C_OCEAN_LIGHT);
 
+  // if the elapsed time is even, draw the tap to continue text
   if (((elapsed / 400) & 1U) == 0) {
     drawTextCentered("TAP TO CONTINUE", 292, 1, C_WHITE);
   }
@@ -4176,8 +4096,8 @@ static void drawBriefingScreen(uint32_t now) {
 
 static void drawResultScreen(uint32_t now) {
   float resultAltitude = game.success && currentMission().recoverCapsule
-    ? displayedAltitudeAt(game.altitude)
-    : displayedAltitudeAt(game.maximumAltitude);
+                             ? displayedAltitudeAt(game.altitude)
+                             : displayedAltitudeAt(game.maximumAltitude);
   drawBackground(resultAltitude, resultAltitude, now,
                  currentMission().flightType,
                  game.success && !currentMission().recoverCapsule);
@@ -4189,8 +4109,8 @@ static void drawResultScreen(uint32_t now) {
   bool finalMission = game.selectedMission + 1 >= MISSION_COUNT;
 
   drawTextCentered(game.success
-                     ? (finalMission ? "CAMPAIGN COMPLETE" : "LEVEL CLEARED")
-                     : "MISSION FAILED",
+                       ? (finalMission ? "CAMPAIGN COMPLETE" : "LEVEL CLEARED")
+                       : "MISSION FAILED",
                    43, 1, game.success ? C_GREEN : C_RED);
 
   drawTextCentered(currentMission().name, 60, 1, C_TEXT);
@@ -4272,15 +4192,13 @@ static void applyFrameShake(uint32_t now) {
     for (int16_t y = 0; y < SCREEN_H; y++) {
       uint16_t *row = buffer + y * SCREEN_W;
       if (offsetX > 0) {
-        memmove(row + offsetX, row,
-                (SCREEN_W - offsetX) * sizeof(uint16_t));
+        memmove(row + offsetX, row, (SCREEN_W - offsetX) * sizeof(uint16_t));
         for (int16_t x = 0; x < offsetX; x++) {
           row[x] = C_BLACK;
         }
       } else {
         int16_t columns = -offsetX;
-        memmove(row, row + columns,
-                (SCREEN_W - columns) * sizeof(uint16_t));
+        memmove(row, row + columns, (SCREEN_W - columns) * sizeof(uint16_t));
         for (int16_t x = SCREEN_W - columns; x < SCREEN_W; x++) {
           row[x] = C_BLACK;
         }
@@ -4293,21 +4211,21 @@ static void renderFrame(uint32_t now) {
   frame.fillScreen(C_BLACK);
 
   switch (game.screen) {
-    case ScreenMode::SPLASH:
-      drawSplashScreen(now);
-      break;
+  case ScreenMode::SPLASH:
+    drawSplashScreen(now);
+    break;
 
-    case ScreenMode::BRIEFING:
-      drawBriefingScreen(now);
-      break;
+  case ScreenMode::BRIEFING:
+    drawBriefingScreen(now);
+    break;
 
-    case ScreenMode::FLIGHT:
-      drawFlightScreen(now);
-      break;
+  case ScreenMode::FLIGHT:
+    drawFlightScreen(now);
+    break;
 
-    case ScreenMode::RESULT:
-      drawResultScreen(now);
-      break;
+  case ScreenMode::RESULT:
+    drawResultScreen(now);
+    break;
   }
 
   applyFrameShake(now);
@@ -4331,9 +4249,7 @@ public:
     lastColour = 0xFFFFFFFFU;
   }
 
-  void showHardwareFault(bool lit) {
-    set(lit ? 240 : 0, 0, 0);
-  }
+  void showHardwareFault(bool lit) { set(lit ? 240 : 0, 0, 0); }
 
   void update(uint32_t now) {
     if (game.screen == ScreenMode::SPLASH) {
@@ -4382,68 +4298,68 @@ public:
     }
 
     switch (game.phase) {
-      case FlightPhase::COUNTDOWN: {
-        uint32_t elapsed = now - game.phaseStartedAt;
-        bool lit = ((elapsed / (elapsed > 2200 ? 90U : 220U)) & 1U) == 0;
-        set(lit ? 220 : 12, lit ? 82 : 3, 0);
-        break;
-      }
+    case FlightPhase::COUNTDOWN: {
+      uint32_t elapsed = now - game.phaseStartedAt;
+      bool lit = ((elapsed / (elapsed > 2200 ? 90U : 220U)) & 1U) == 0;
+      set(lit ? 220 : 12, lit ? 82 : 3, 0);
+      break;
+    }
 
-      case FlightPhase::BURNING: {
-        float fuel = currentFuelFraction();
-        if (fuel < 0.08f) {
-          bool lit = ((now / 75U) & 1U) == 0;
-          set(lit ? 240 : 20, 0, 0);
-        } else if (fuel < 0.20f) {
-          bool lit = ((now / 155U) & 1U) == 0;
-          set(lit ? 210 : 42, lit ? 92 : 12, 0);
-        } else {
-          uint8_t pulse = breathe(now, 720, 75, 155);
-          set(0, pulse, pulse + 55);
-        }
-        break;
+    case FlightPhase::BURNING: {
+      float fuel = currentFuelFraction();
+      if (fuel < 0.08f) {
+        bool lit = ((now / 75U) & 1U) == 0;
+        set(lit ? 240 : 20, 0, 0);
+      } else if (fuel < 0.20f) {
+        bool lit = ((now / 155U) & 1U) == 0;
+        set(lit ? 210 : 42, lit ? 92 : 12, 0);
+      } else {
+        uint8_t pulse = breathe(now, 720, 75, 155);
+        set(0, pulse, pulse + 55);
       }
+      break;
+    }
 
-      case FlightPhase::COASTING: {
-        uint8_t pulse = breathe(now, 1350, 22, 145);
-        set(0, pulse / 2, pulse);
-        break;
-      }
+    case FlightPhase::COASTING: {
+      uint8_t pulse = breathe(now, 1350, 22, 145);
+      set(0, pulse / 2, pulse);
+      break;
+    }
 
-      case FlightPhase::APOGEE: {
-        uint8_t pulse = breathe(now, 900, 45, 205);
-        set(pulse / 2, pulse, pulse / 2);
-        break;
-      }
+    case FlightPhase::APOGEE: {
+      uint8_t pulse = breathe(now, 900, 45, 205);
+      set(pulse / 2, pulse, pulse / 2);
+      break;
+    }
 
-      case FlightPhase::REENTRY: {
-        uint8_t flicker = 120 + (uint8_t)((now / 47U * 37U) % 110U);
-        set(flicker, flicker / 5, 0);
-        break;
-      }
+    case FlightPhase::REENTRY: {
+      uint8_t flicker = 120 + (uint8_t)((now / 47U * 37U) % 110U);
+      set(flicker, flicker / 5, 0);
+      break;
+    }
 
-      case FlightPhase::RECOVERY: {
-        uint8_t pulse = breathe(now, 1200, 42, 175);
-        set(0, pulse, pulse / 2);
-        break;
-      }
+    case FlightPhase::RECOVERY: {
+      uint8_t pulse = breathe(now, 1200, 42, 175);
+      set(0, pulse, pulse / 2);
+      break;
+    }
 
-      case FlightPhase::DEPLOYMENT: {
-        uint8_t pulse = breathe(now, 780, 45, 185);
-        set(pulse / 2, 0, pulse);
-        break;
-      }
+    case FlightPhase::DEPLOYMENT: {
+      uint8_t pulse = breathe(now, 780, 45, 185);
+      set(pulse / 2, 0, pulse);
+      break;
+    }
 
-      case FlightPhase::EXPLOSION: {
-        set(255, 0, 0);
-        break;
-      }
+    case FlightPhase::EXPLOSION: {
+      set(255, 0, 0);
+      break;
+    }
 
-      case FlightPhase::DESCENDING: {
-        bool lit = doubleBlink(now, 820);
-        set(lit ? 230 : 15, lit ? 12 : 0, 0);
-        break;
-      }
+    case FlightPhase::DESCENDING: {
+      bool lit = doubleBlink(now, 820);
+      set(lit ? 230 : 15, lit ? 12 : 0, 0);
+      break;
+    }
     }
   }
 
@@ -4451,8 +4367,8 @@ private:
   Adafruit_NeoPixel &pixel;
   uint32_t lastColour = 0xFFFFFFFFU;
 
-  static uint8_t breathe(uint32_t now, uint16_t period,
-                         uint8_t minimum, uint8_t maximum) {
+  static uint8_t breathe(uint32_t now, uint16_t period, uint8_t minimum,
+                         uint8_t maximum) {
     float phase = (now % period) / (float)period * 6.2831853f;
     float amount = sinf(phase) * 0.5f + 0.5f;
     return minimum + (uint8_t)((maximum - minimum) * amount);
@@ -4571,9 +4487,11 @@ void voidAscentLoop() {
   // repeatedly during the several loop iterations between rendered frames.
   button.clearEvents();
 
-  if (game.screen == ScreenMode::SPLASH && now - game.screenStartedAt > 3900) {
-    setScreen(ScreenMode::BRIEFING);
-  }
+  // auto transition to briefing after 3.9 seconds
+  // if (game.screen == ScreenMode::SPLASH && now - game.screenStartedAt > 3900)
+  // {
+  //   setScreen(ScreenMode::BRIEFING);
+  // }
 
   if (now - lastFrameAt < FRAME_INTERVAL_MS) {
     statusLed.update(now);
