@@ -1,75 +1,55 @@
 # Adding another game
 
-## 1. Create a game class
+Create a directory under `src/Games/` and implement `pocketgame::IGame`.
 
 ```cpp
-#pragma once
-#include "../../PocketGame/PocketGame.h"
-
-class CityTowerGame final : public pocketgame::IGame {
+class NewGame final : public pocketgame::IGame {
 public:
-  const char *id() const override { return "city-tower"; }
-  const char *title() const override { return "CITY TOWER"; }
-  const char *description() const override { return "STACK THE CITY"; }
-  const char *storageNamespace() const override { return "citytower"; }
+  const char *id() const override { return "new-game"; }
+  const char *title() const override { return "NEW GAME"; }
+  const char *description() const override { return "SHORT DESCRIPTION"; }
+  const char *storageNamespace() const override { return "newgame"; }
 
   void begin(pocketgame::PocketGameSystem &system) override;
   void loop(pocketgame::PocketGameSystem &system, uint32_t now) override;
 };
 ```
 
-Use a short, unique storage namespace. ESP32 NVS namespaces should remain at most 15 characters.
-
-## 2. Use shared services
+Register it in `PocketGame_Arcade.ino`:
 
 ```cpp
-void CityTowerGame::begin(pocketgame::PocketGameSystem &system) {
-  const int32_t best = system.storage().getInt32("best", 0);
-  system.led().off();
-  system.display().canvas().fillScreen(0);
-}
-
-void CityTowerGame::loop(pocketgame::PocketGameSystem &system, uint32_t now) {
-  const auto &input = system.controls().events();
-
-  if (input.actionPressed) {
-    // Drop the moving floor immediately on the press edge.
-  }
-
-  if (input.cycle) {
-    // Cycle a menu item.
-  }
-
-  if (input.select) {
-    // Select the current menu item.
-  }
-
-  auto &frame = system.display().canvas();
-  // Draw a complete RAM frame...
-  system.display().present();
-}
-```
-
-For menus, use `pocketgame::MenuNavigator`. For game screen state, use `pocketgame::ScreenNavigator<YourScreenEnum>`.
-
-## 3. Register it
-
-In `PocketGame_VoidAscent.ino`:
-
-```cpp
-#include "src/Games/CityTower/CityTowerGame.h"
-
-CityTowerGame cityTower;
+NewGame newGame;
 
 void setup() {
   pocketGame.registerGame(voidAscent);
   pocketGame.registerGame(cityTower);
+  pocketGame.registerGame(newGame);
   pocketGame.begin();
 }
 ```
 
-With multiple registered games, the system launcher appears automatically. Hold cycles through games and tap starts the selected game.
+The PocketGame game library automatically expands to include it.
 
-## 4. Changing physical controls
+## Required rules
 
-Games must not call `digitalRead()` directly. Create another `IControlSource` implementation that maps the new hardware to `ControlEvents`, then replace the control-source object in the `.ino`. Existing games remain unchanged.
+- Draw only through `system.display().canvas()`.
+- Call `system.display().present()` after a complete RAM frame is rendered.
+- Read controls through `system.controls().events()`.
+- Use click/cycle and hold/select for menus.
+- Save through `system.storage()` only.
+- Drive status light through `system.led()` only.
+- Call `system.requestLauncher()` to return to PocketGame.
+- Do not include Preferences, SD, LCD drivers, NeoPixel drivers, or board pins.
+
+## Recommended game screens
+
+A one-button game should normally provide:
+
+```text
+GAME MENU -> PLAY
+          -> HOW TO
+          -> POCKETGAME
+
+PLAY --hold--> PAUSE -> RESUME / RESTART / POCKETGAME
+RESULT -> RETRY / GAME MENU / POCKETGAME
+```

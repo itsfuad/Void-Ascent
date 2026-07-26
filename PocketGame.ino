@@ -1,17 +1,20 @@
 #include "src/PocketGame/PocketGame.h"
 #include "src/PocketGame/PreferencesStorageBackend.h"
 #include "src/Games/VoidAscent/VoidAscentGame.h"
+#include "src/Games/CityTower/CityTowerGame.h"
 
-// Hardware and storage composition is centralized here. Games only receive the
-// PocketGame APIs and do not know which pins or storage medium are in use.
+// Firmware composition lives only here. Both games receive the same display,
+// single-button controls, LED, navigation, and media-independent storage APIs.
 pocketgame::SingleButtonControlSource controls;
 pocketgame::PreferencesStorageBackend storageBackend;
 pocketgame::PocketGameSystem pocketGame(controls, storageBackend);
 
 VoidAscentGame voidAscent;
+CityTowerGame cityTower;
 
 void setup() {
   pocketGame.registerGame(voidAscent);
+  pocketGame.registerGame(cityTower);
   pocketGame.begin();
 }
 

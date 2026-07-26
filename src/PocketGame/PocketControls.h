@@ -15,9 +15,10 @@ public:
 };
 
 // Default mapping for the board's single active-low button:
-//   tap       -> select
-//   hold      -> cycle
-//   press edge-> actionPressed (used by timing games)
+//   click / tap -> cycle (and the normal in-game action)
+//   press-hold  -> select / confirm
+// Raw press and release edges remain available for a future game that needs
+// continuous input, but shared menus only use cycle and select.
 class SingleButtonControlSource final : public IControlSource {
 public:
   explicit SingleButtonControlSource(

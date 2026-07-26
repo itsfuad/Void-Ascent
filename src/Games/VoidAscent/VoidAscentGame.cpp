@@ -602,6 +602,8 @@ struct GameState {
 
   float explosionX = 86.0f;
   float explosionY = 150.0f;
+
+  bool splashExitSelected = false;
 };
 
 static GameState game;
@@ -3593,8 +3595,16 @@ static void updateScreenInput() {
   const pocketgame::ControlEvents &controls = pocketSystem->controls().events();
 
   if (game.screens.is(ScreenMode::SPLASH)) {
+    if (controls.cycle) {
+      game.splashExitSelected = !game.splashExitSelected;
+      game.screens.refresh(millis());
+    }
     if (controls.select) {
-      setScreen(ScreenMode::BRIEFING);
+      if (game.splashExitSelected) {
+        pocketSystem->requestLauncher();
+      } else {
+        setScreen(ScreenMode::BRIEFING);
+      }
     }
     return;
   }
@@ -3613,7 +3623,7 @@ static void updateScreenInput() {
   }
 
   if (game.screens.is(ScreenMode::FLIGHT)) {
-    if (controls.actionPressed && game.phase == FlightPhase::BURNING) {
+    if (controls.cycle && game.phase == FlightPhase::BURNING) {
       separateCurrentStage();
     }
     return;
@@ -3964,16 +3974,20 @@ static void drawSplashScreen(uint32_t now) {
 
   frame.drawFastVLine(20, 38, 64, C_OCEAN_LIGHT);
 
-  drawTextLeft("TINY CONSOLE - v0.0.2", 28, 39, 1, C_MUTED);
+  drawTextLeft("POCKETGAME", 28, 39, 1, C_MUTED);
 
   drawTextLeft("VOID", 28, 55, 3, C_WHITE);
 
   drawTextLeft("ASCENT", 28, 83, 2, C_OCEAN_LIGHT);
 
-  // if the elapsed time is even, draw the tap to continue text
-  if (((elapsed / 400) & 1U) == 0) {
-    drawTextCentered("TAP TO CONTINUE", 292, 1, C_WHITE);
-  }
+  frame.fillRoundRect(18, 275, 136, 34, 7, C_PANEL);
+  frame.drawRoundRect(18, 275, 136, 34, 7,
+                      game.splashExitSelected ? C_ORANGE : C_OCEAN_LIGHT);
+  drawTextCentered(game.splashExitSelected ? "> POCKETGAME <"
+                                           : "> CAMPAIGN <",
+                   283, 1,
+                   game.splashExitSelected ? C_ORANGE : C_WHITE);
+  drawTextCentered("CLICK NEXT  HOLD SELECT", 298, 1, C_MUTED);
 }
 
 // =============================================================================
@@ -4038,7 +4052,7 @@ static void drawBriefingScreen(uint32_t now) {
 
   frame.drawRoundRect(18, 278, 136, 34, 8, C_BORDER);
 
-  drawTextCentered("TAP TO LAUNCH", 287, 1,
+  drawTextCentered("HOLD TO LAUNCH", 287, 1,
                    ((now / 330) & 1U) ? C_WHITE : C_GREEN);
 
   drawTextCentered("NEXT LEVEL LOCKED", 301, 1,
@@ -4102,18 +4116,18 @@ static void drawResultScreen(uint32_t now) {
 
       drawTextCentered(unlockedText, 177, 1, C_GREEN);
 
-      drawTextCentered("TAP FOR NEXT LEVEL", 198, 1, C_CYAN);
+      drawTextCentered("HOLD FOR NEXT LEVEL", 198, 1, C_CYAN);
     } else {
       drawTextCentered("ALL LEVELS CLEARED", 177, 1, C_GREEN);
 
-      drawTextCentered("TAP TO REPLAY", 198, 1, C_CYAN);
+      drawTextCentered("HOLD TO REPLAY", 198, 1, C_CYAN);
     }
   } else {
     drawTextCentered("FAILURE CAUSE", 170, 1, C_MUTED);
 
     drawTextCentered(game.failureReason, 190, 1, C_ORANGE);
 
-    drawTextCentered("TAP TO RETRY", 218, 1, C_WHITE);
+    drawTextCentered("HOLD TO RETRY", 218, 1, C_WHITE);
   }
 }
 
@@ -4338,6 +4352,7 @@ void VoidAscentGame::begin(PocketGameSystem &system) {
   frame.setTextWrap(false);
   initializeSceneSeeds();
   loadProgress();
+  game.splashExitSelected = false;
   setScreen(ScreenMode::SPLASH);
 
   lastFrameAt = millis();
@@ -4347,6 +4362,9 @@ void VoidAscentGame::begin(PocketGameSystem &system) {
 void VoidAscentGame::loop(PocketGameSystem &system, uint32_t now) {
   pocketSystem = &system;
   updateScreenInput();
+  if (system.activeGame() != this) {
+    return;
+  }
 
   if (now - lastFrameAt < FRAME_INTERVAL_MS) {
     statusLed.update(now);

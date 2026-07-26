@@ -32,6 +32,7 @@ private:
   Arduino_GFX *gfx_ = nullptr;
   GFXcanvas16 frame_;
   bool ready_ = false;
+  bool backlightReady_ = false;
 
   static uint8_t brightnessDuty(uint8_t percentage);
 };

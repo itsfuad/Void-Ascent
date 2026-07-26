@@ -24,7 +24,15 @@ static constexpr int16_t LCD_NATIVE_HEIGHT = 320;
 
 static constexpr uint8_t LCD_ROTATION = 2;
 static constexpr uint32_t LCD_SPI_HZ = 40000000UL;
-static constexpr uint8_t DISPLAY_BRIGHTNESS_PERCENT = 50;
+
+// User-facing brightness is always 5..100. The display driver maps 100 to
+// only 60% of the electrical PWM range to protect the small LCD backlight.
+static constexpr uint8_t DISPLAY_DEFAULT_BRIGHTNESS = 50;
+static constexpr uint8_t DISPLAY_MIN_BRIGHTNESS = 5;
+static constexpr uint8_t DISPLAY_MAX_BRIGHTNESS = 100;
+static constexpr uint8_t DISPLAY_HARDWARE_LIMIT_PERCENT = 60;
+static constexpr uint8_t DISPLAY_BRIGHTNESS_STEP = 5;
+
 static constexpr uint8_t RGB_LED_BRIGHTNESS = 45;
 static constexpr bool RGB_LED_ENABLED = true;
 
@@ -33,6 +41,7 @@ static constexpr uint16_t BUTTON_HOLD_MS = 580;
 
 static constexpr uint8_t MAX_REGISTERED_GAMES = 8;
 static constexpr uint32_t SYSTEM_FRAME_INTERVAL_MS = 33;
+static constexpr uint32_t BOOT_SCREEN_MS = 1750;
 
 } // namespace pocketgame::config
 

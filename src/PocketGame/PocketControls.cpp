@@ -31,7 +31,7 @@ void SingleButtonControlSource::update(uint32_t now, ControlEvents &events) {
 
       if (!holdSent_ && now - pressedAt_ < holdMs_) {
         events.tapped = true;
-        events.select = true;
+        events.cycle = true;
       }
     }
   }
@@ -39,7 +39,7 @@ void SingleButtonControlSource::update(uint32_t now, ControlEvents &events) {
   if (stableDown_ && !holdSent_ && now - pressedAt_ >= holdMs_) {
     holdSent_ = true;
     events.held = true;
-    events.cycle = true;
+    events.select = true;
   }
 }
 

@@ -4,5 +4,6 @@ CompileFlags:
     - -Isrc
     - -Isrc/PocketGame
     - -Isrc/Games/VoidAscent
+    - -Isrc/Games/CityTower
 Diagnostics:
   UnusedIncludes: Strict

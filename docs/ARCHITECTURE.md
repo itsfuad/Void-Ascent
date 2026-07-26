@@ -1,54 +1,64 @@
-# Architecture
+# PocketGame architecture
 
-```mermaid
-flowchart TD
-    INO[PocketGame_VoidAscent.ino] --> SYS[PocketGameSystem]
-    INO --> GAME[VoidAscentGame]
-    SYS --> REG[Game registry / launcher]
-    SYS --> CTRL[PocketControls]
-    SYS --> DISP[PocketDisplay]
-    SYS --> LED[PocketLed]
-    SYS --> STORE[PocketStorage]
-    CTRL --> SOURCE[IControlSource]
-    SOURCE --> ONE[SingleButtonControlSource]
-    STORE --> BACKEND[IStorageBackend]
-    BACKEND --> NVS[PreferencesStorageBackend\non-chip NVS]
-    BACKEND -. optional .-> SD[SdStorageBackend]
-    GAME --> CTRL
-    GAME --> DISP
-    GAME --> LED
-    GAME --> STORE
-    GAME --> NAV[MenuNavigator / ScreenNavigator]
+## Composition root
+
+`PocketGame_Arcade.ino` is the only place that chooses concrete hardware and
+storage implementations. It creates one control source, one storage backend,
+one PocketGame system, and the game objects.
+
+## System ownership
+
+`PocketGameSystem` owns:
+
+- boot screen
+- main menu
+- game library
+- display settings
+- game registration and launching
+- shared display framebuffer
+- shared controls
+- RGB LED
+- active storage namespace
+
+A game receives `PocketGameSystem&` and uses the public APIs. It does not own or
+reinitialize hardware.
+
+## System screens
+
+```text
+BOOT -> HOME -> GAMES -> GAME
+          |
+          `-> SETTINGS -> HOME
 ```
 
-## Ownership boundary
+`requestLauncher()` closes the current game namespace, reopens the system
+namespace, restores the safe brightness value, and returns to HOME.
 
-`PocketGameSystem` owns hardware-facing services and the active storage namespace. A game receives the system by reference and accesses only stable APIs.
+## Input boundary
 
-`VoidAscentGame` owns only its domain:
+`IControlSource` translates physical hardware into `ControlEvents`.
+The default single-button source maps:
 
-- missions and compile-time validation
-- physics and timing
-- particles, fragments, rocket geometry and drawing
-- scoring and progression decisions
-- splash, briefing, flight and result presentation
-
-## Main loop
-
-```mermaid
-sequenceDiagram
-    participant Arduino
-    participant PocketGameSystem
-    participant Controls
-    participant VoidAscent
-    participant Display
-
-    Arduino->>PocketGameSystem: loop()
-    PocketGameSystem->>Controls: update(now)
-    PocketGameSystem->>VoidAscent: loop(system, now)
-    VoidAscent->>VoidAscent: process semantic controls
-    VoidAscent->>VoidAscent: update physics when frame is due
-    VoidAscent->>Display: draw into canvas()
-    VoidAscent->>Display: present()
-    PocketGameSystem->>Controls: consume events
+```text
+short click -> cycle
+timed hold  -> select
 ```
+
+Raw press/release edges remain in the event object for future input devices or
+games, but menu code uses only semantic events.
+
+## Storage boundary
+
+`IStorageBackend` is implemented by concrete media. `PocketStorage` provides the
+fixed-width values/byte API used by system and games.
+
+```text
+Game -> PocketStorage -> IStorageBackend -> Preferences/NVS
+                                      `-> optional SD backend
+```
+
+## Display safety
+
+`PocketDisplay::setBrightness()` accepts a logical 5–100 value. The PWM mapping
+caps 100 at 60% electrical duty. The policy remains in the driver rather than
+in a menu or game.

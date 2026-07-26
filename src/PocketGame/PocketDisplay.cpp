@@ -31,7 +31,7 @@ bool PocketDisplay::begin() {
       bus_, config::LCD_RESET_PIN, config::LCD_ROTATION, true,
       config::LCD_NATIVE_WIDTH, config::LCD_NATIVE_HEIGHT, 34, 0, 34, 0);
 
-  setBrightness(config::DISPLAY_BRIGHTNESS_PERCENT);
+  setBrightness(config::DISPLAY_DEFAULT_BRIGHTNESS);
   ready_ = gfx_ != nullptr && gfx_->begin(config::LCD_SPI_HZ);
 
   if (ready_) {
@@ -54,14 +54,21 @@ void PocketDisplay::present() {
 void PocketDisplay::clear(uint16_t colour) { frame_.fillScreen(colour); }
 
 uint8_t PocketDisplay::brightnessDuty(uint8_t percentage) {
-  const uint16_t clamped = percentage > 100 ? 100 : percentage;
-  if (clamped == 0) {
-    return 0;
+  uint16_t clamped = percentage;
+  if (clamped < config::DISPLAY_MIN_BRIGHTNESS) {
+    clamped = config::DISPLAY_MIN_BRIGHTNESS;
+  }
+  if (clamped > config::DISPLAY_MAX_BRIGHTNESS) {
+    clamped = config::DISPLAY_MAX_BRIGHTNESS;
   }
 
-  // Perceptual quadratic mapping makes 50% look closer to half brightness.
+  // Perceptual square curve, then cap the electrical output. A logical 100%
+  // equals only DISPLAY_HARDWARE_LIMIT_PERCENT (60%) of the PWM duty range.
   const uint32_t squared = (uint32_t)clamped * (uint32_t)clamped;
-  const uint8_t duty = (uint8_t)((squared * 255U + 5000U) / 10000U);
+  const uint32_t limitedMaximum =
+      (255U * config::DISPLAY_HARDWARE_LIMIT_PERCENT + 50U) / 100U;
+  const uint8_t duty =
+      (uint8_t)((squared * limitedMaximum + 5000U) / 10000U);
   return duty < 2 ? 2 : duty;
 }
 
@@ -69,11 +76,17 @@ void PocketDisplay::setBrightness(uint8_t percentage) {
   const uint8_t duty = brightnessDuty(percentage);
 
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-  ledcAttach(config::LCD_BACKLIGHT_PIN, 5000, 8);
+  if (!backlightReady_) {
+    ledcAttach(config::LCD_BACKLIGHT_PIN, 5000, 8);
+    backlightReady_ = true;
+  }
   ledcWrite(config::LCD_BACKLIGHT_PIN, duty);
 #else
-  ledcSetup(BACKLIGHT_CHANNEL, 5000, 8);
-  ledcAttachPin(config::LCD_BACKLIGHT_PIN, BACKLIGHT_CHANNEL);
+  if (!backlightReady_) {
+    ledcSetup(BACKLIGHT_CHANNEL, 5000, 8);
+    ledcAttachPin(config::LCD_BACKLIGHT_PIN, BACKLIGHT_CHANNEL);
+    backlightReady_ = true;
+  }
   ledcWrite(BACKLIGHT_CHANNEL, duty);
 #endif
 }

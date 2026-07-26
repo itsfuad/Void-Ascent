@@ -1,97 +1,150 @@
-# PocketGame + Void Ascent
+# PocketGame Arcade
 
-A single Arduino sketch containing a reusable **PocketGame system layer** and the existing **Void Ascent** game.
+A single Arduino firmware for the Waveshare ESP32-C6 1.47-inch LCD board.
+It boots into a reusable PocketGame console UI and contains two games:
 
-The current firmware stores campaign progress in the ESP32-C6's on-chip NVS through `PreferencesStorageBackend`. There is no SD-card requirement. Void Ascent only calls `PocketStorage`, so changing the storage backend does not change game code.
+1. **Void Ascent** — the existing one-button rocket campaign.
+2. **City Tower** — a detailed crane-and-tower stacking game inspired by classic
+   phone tower builders.
+
+The games do not own display pins, the physical button, RGB LED, backlight PWM,
+or storage hardware. Those are provided by the shared PocketGame system.
 
 ## Open and compile
 
-1. Keep the complete `PocketGame_VoidAscent` folder together.
-2. Open `PocketGame_VoidAscent.ino` in Arduino IDE.
-3. Select the Waveshare ESP32-C6 board configuration you already use.
-4. Install these libraries:
-   - Arduino_GFX_Library
-   - Adafruit GFX Library
-   - Adafruit NeoPixel
-5. Compile and upload.
+Open:
 
-The sketch and every source file under `src/` are compiled into one firmware by Arduino IDE.
+`PocketGame_Arcade/PocketGame_Arcade.ino`
 
-## Default controls
+Required Arduino libraries:
 
-| Physical input | Shared control | Void Ascent use |
-|---|---|---|
-| Tap | Select | Continue, launch, retry |
-| Hold | Cycle | Cycle unlocked missions |
-| Press edge | Action | Separate the active rocket stage |
+- Arduino_GFX_Library
+- Adafruit GFX Library
+- Adafruit NeoPixel
 
-Games consume semantic controls, not GPIO pins. To add or replace physical buttons later, update the control-source implementation or board configuration rather than every game.
+Select the same ESP32-C6/Waveshare board configuration used by the previous
+Void Ascent build, then compile and upload.
+
+## Boot flow
+
+PocketGame never launches a game immediately.
+
+```text
+POCKETGAME BOOT
+       |
+       v
+MAIN MENU
+  |-- GAMES
+  |     |-- VOID ASCENT
+  |     |-- CITY TOWER
+  |     `-- BACK
+  `-- SETTINGS
+        `-- DISPLAY BRIGHTNESS
+```
+
+## One-button controls
+
+The shared physical mapping is now consistent everywhere:
+
+- **Click / short press:** cycle to the next menu item.
+- **Press and hold:** select or confirm the highlighted item.
+
+Games consume these semantic events instead of reading GPIO directly.
+
+### During City Tower
+
+- Click while a floor is swinging: drop it.
+- Hold during play: pause.
+- In pause/result menus: click cycles, hold selects.
+
+### During Void Ascent
+
+- Click during powered flight: separate the active stage.
+- Game and mission menus: click cycles, hold selects.
+- The Void Ascent opening menu includes a PocketGame return option.
+
+## Safe brightness setting
+
+Settings contains only display brightness:
+
+- User range: **5% to 100%**
+- Step: **5%**
+- User-facing **100% maps to 60% of the hardware PWM range**
+- The value is stored through `PocketStorage`
+
+This limit is enforced inside `PocketDisplay`; games cannot bypass it through
+normal PocketGame APIs.
+
+## Storage abstraction
+
+The complete firmware currently composes:
+
+```cpp
+pocketgame::PreferencesStorageBackend storageBackend;
+```
+
+This stores settings and game saves in on-chip ESP32 NVS. Each game only uses:
+
+```cpp
+system.storage().getUInt32(...);
+system.storage().putUInt32(...);
+```
+
+It has no knowledge of Preferences, NVS, SD cards, files, or paths.
+`SdStorageBackend` remains available as an optional replacement. Changing the
+backend in the sketch does not require changing either game.
+
+Namespaces:
+
+- `pocketgame` — brightness and future system settings
+- `voidascent` — Void Ascent progression and best scores
+- `citytower` — City Tower records and lifetime population
+
+## City Tower features
+
+- Pendulum-like crane swing and release velocity
+- Increasing swing speed and difficulty as the tower grows
+- Three lives
+- Perfect, good, rough, and missed landings
+- Perfect-drop combos and score bonuses
+- Residents parachuting into successful floors
+- Population, score, floor count, high score, and best height
+- Four detailed floor styles with lit windows, doors, trim, depth, and damage
+- Tower sway, accumulated lean, particles, impact effects, and LED feedback
+- Scrolling camera as the tower rises
+- Day-to-night skyline transition
+- Animated clouds, layered city silhouettes, roads, windows, crane truss, and
+  tiny parachuting residents
+- In-game pause, restart, game menu, and PocketGame return paths
+- How-to pages using the same single-button navigation
 
 ## Folder structure
 
 ```text
-PocketGame_VoidAscent/
-├── PocketGame_VoidAscent.ino       # firmware composition and game registry
+PocketGame_Arcade/
+├── PocketGame_Arcade.ino
 ├── src/
-│   ├── PocketGame/                 # reusable system library
-│   │   ├── PocketGame.*            # lifecycle, registry, shared launcher
-│   │   ├── PocketGameConfig.h      # all board pins and display settings
-│   │   ├── PocketControls.*        # input abstraction and mappings
-│   │   ├── PocketDisplay.*         # LCD, backlight, RAM framebuffer, present
-│   │   ├── PocketLed.*             # RGB LED hardware and animation helpers
-│   │   ├── PocketNavigation.*      # screen and cycle/select navigation
-│   │   ├── PocketStorage.*         # storage API visible to games
-│   │   ├── PreferencesStorageBackend.* # default on-chip NVS backend
-│   │   └── SdStorageBackend.*      # optional removable-card backend
+│   ├── PocketGame/
+│   │   ├── PocketGame.*              # console lifecycle and system UI
+│   │   ├── PocketControls.*          # hardware-independent input mapping
+│   │   ├── PocketDisplay.*           # LCD, RAM framebuffer, safe brightness
+│   │   ├── PocketLed.*               # shared RGB LED API
+│   │   ├── PocketNavigation.*        # cycle/select menu logic
+│   │   ├── PocketStorage.*           # game-facing storage API
+│   │   ├── PreferencesStorageBackend.*
+│   │   └── SdStorageBackend.*
 │   └── Games/
-│       └── VoidAscent/             # game-only physics, art, rules and screens
-├── docs/
-└── flash.sh
+│       ├── VoidAscent/
+│       │   ├── VoidAscentGame.*
+│       │   └── MissionValidation.h
+│       └── CityTower/
+│           └── CityTowerGame.*
+└── docs/
 ```
 
-## What was moved out of Void Ascent
+## Validation performed
 
-The game no longer initializes or directly owns:
-
-- LCD pins, SPI bus, backlight, display driver, or screen presentation
-- GPIO button and debounce/hold detection
-- RGB LED hardware
-- `Preferences` or any storage medium
-- generic cycle/select menu state
-- firmware/game registration and startup
-
-Void Ascent still owns its game-specific rules, rendering, flight state, mission data, scoring, and LED *meaning*. It asks the shared LED API to show the selected colour.
-
-## Adding games
-
-Implement `pocketgame::IGame`, place the game under `src/Games/<GameName>/`, create one global game object in the `.ino`, then register it before `pocketGame.begin()`.
-
-When two or more games are registered, PocketGame automatically shows its shared one-button launcher. With one registered game, it boots directly into that game to preserve the current experience.
-
-See `docs/ADDING_A_GAME.md`.
-
-## Storage
-
-Default:
-
-```cpp
-pocketgame::PreferencesStorageBackend storageBackend;
-pocketgame::PocketGameSystem pocketGame(controls, storageBackend);
-```
-
-The game continues to use calls such as:
-
-```cpp
-system.storage().getUInt8("unlocked", 1);
-system.storage().putInt32("best0", score);
-```
-
-It has no knowledge of NVS, SD, LittleFS, files, mount points, or chip-select pins. The new Preferences backend also reads the old `UChar` and `Int` values created by the original Void Ascent build, so existing progress can migrate into the abstraction.
-
-See `docs/STORAGE_BACKENDS.md` for swapping backends.
-
-## Notes
-
-- RAM rendering is preserved: the complete 172×320 frame is drawn into `GFXcanvas16` and sent to the LCD once per rendered frame.
-- The original mission validation remains compile-time checked.
-- `flash.sh` remains available for Arduino CLI users.
+The complete sketch and every C++ translation unit were syntax-compiled under
+GNU C++17 with strict warnings. The optional SD backend was also compiled in
+its enabled configuration. Final validation still requires compiling with the
+installed ESP32 Arduino core and testing on the physical board.

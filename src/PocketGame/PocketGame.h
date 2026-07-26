@@ -25,6 +25,8 @@ public:
   virtual void loop(PocketGameSystem &system, uint32_t now) = 0;
 };
 
+enum class SystemScreen : uint8_t { BOOT, HOME, GAMES, SETTINGS };
+
 class PocketGameSystem {
 public:
   PocketGameSystem(IControlSource &controlSource, IStorageBackend &storageBackend)
@@ -46,12 +48,15 @@ public:
 
   IGame *activeGame() const { return activeGame_; }
   uint8_t gameCount() const { return gameCount_; }
+  uint8_t brightness() const { return brightness_; }
 
-  // A game may return to the shared launcher without knowing how the launcher
-  // is drawn or how its controls are mapped.
+  // A game may return to PocketGame without knowing how the system screens are
+  // drawn, where settings are stored, or how the controls are wired.
   void requestLauncher();
 
 private:
+  static constexpr const char *SYSTEM_STORAGE_NAMESPACE = "pocketgame";
+
   PocketDisplay display_;
   PocketControls controls_;
   PocketLed led_;
@@ -60,13 +65,27 @@ private:
   IGame *games_[config::MAX_REGISTERED_GAMES] = {};
   uint8_t gameCount_ = 0;
   IGame *activeGame_ = nullptr;
-  MenuNavigator launcherMenu_;
-  uint32_t lastLauncherFrameAt_ = 0;
+
+  SystemScreen systemScreen_ = SystemScreen::BOOT;
+  MenuNavigator homeMenu_;
+  MenuNavigator gameMenu_;
+  uint32_t screenStartedAt_ = 0;
+  uint32_t lastSystemFrameAt_ = 0;
+  uint8_t brightness_ = config::DISPLAY_DEFAULT_BRIGHTNESS;
   bool begun_ = false;
 
   bool launch(uint8_t index);
-  void updateLauncher(uint32_t now);
-  void renderLauncher(uint32_t now);
+  bool openSystemStorage();
+  void setSystemScreen(SystemScreen screen, uint32_t now);
+  void updateSystem(uint32_t now);
+  void updateHome(uint32_t now);
+  void updateGames(uint32_t now);
+  void updateSettings(uint32_t now);
+  void renderSystem(uint32_t now);
+  void renderBoot(uint32_t now);
+  void renderHome(uint32_t now);
+  void renderGames(uint32_t now);
+  void renderSettings(uint32_t now);
   void showHardwareFault();
 };
 
