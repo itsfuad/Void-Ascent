@@ -47,11 +47,20 @@ static constexpr int16_t SCREEN_H = 320;
 static constexpr int16_t LCD_NATIVE_W = 172;
 static constexpr int16_t LCD_NATIVE_H = 320;
 
-#define DISPLAY_BRIGHTNESS 80 // 0-100 percent
-#define ROCKET_POSITION_ADJUST_X 0.0f
-#define ROCKET_POSITION_ADJUST_Y 0.0f
-#define ROCKET_STAGE_ZOOM_PER_SEPARATION 0.16f
-#define ROCKET_MAX_SCALE 1.45f
+#define DISPLAY_BRIGHTNESS 50 // 0-100 percent
+#define ROCKET_POSITION_ADJUST_Y 25.0f
+#define ROCKET_POSITION_ADJUST_START_ALTITUDE 12.0f
+#define ROCKET_POSITION_ADJUST_TRANSITION_ALTITUDE 24.0f
+#define ROCKET_STAGE_ZOOM_PER_SEPARATION 0.26f
+#define ROCKET_MAX_SCALE 2.45f
+
+static_assert(DISPLAY_BRIGHTNESS >= 0 && DISPLAY_BRIGHTNESS <= 100,
+              "DISPLAY_BRIGHTNESS must be in the 0-100 range");
+static_assert(ROCKET_POSITION_ADJUST_Y >= -SCREEN_H &&
+                  ROCKET_POSITION_ADJUST_Y <= SCREEN_H,
+              "ROCKET_POSITION_ADJUST_Y must stay within one screen height");
+static_assert(ROCKET_POSITION_ADJUST_TRANSITION_ALTITUDE > 0.0f,
+              "ROCKET_POSITION_ADJUST_TRANSITION_ALTITUDE must be positive");
 
 // Runtime switch for all onboard RGB status indication.
 static bool onboardLedEnabled = true;
@@ -1611,9 +1620,13 @@ static void buildCurrentRocketGeometry(RocketGeometry &geometry) {
   float stageZoom = 1.0f + separatedStages * ROCKET_STAGE_ZOOM_PER_SEPARATION;
   scaleRocketGeometry(geometry, projection.rocketScale * stageZoom);
 
-  float offsetX = projection.rocketCentreX - SCREEN_W * 0.5f +
-                  ROCKET_POSITION_ADJUST_X;
-  float offsetY = ROCKET_POSITION_ADJUST_Y;
+  float offsetX = projection.rocketCentreX - SCREEN_W * 0.5f;
+  float positionAdjustAmount = smoothStep(
+      ROCKET_POSITION_ADJUST_START_ALTITUDE,
+      ROCKET_POSITION_ADJUST_START_ALTITUDE +
+          ROCKET_POSITION_ADJUST_TRANSITION_ALTITUDE,
+      game.altitude);
+  float offsetY = ROCKET_POSITION_ADJUST_Y * positionAdjustAmount;
   geometry.payloadX += offsetX;
   geometry.payloadY += offsetY;
   geometry.noseY += offsetY;

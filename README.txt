@@ -19,5 +19,13 @@ Required libraries:
 - Adafruit GFX Library
 - Adafruit NeoPixel
 
+Command-line build and flash (no Arduino IDE):
+1. Install Arduino CLI plus the `esp32:esp32` platform and the libraries above.
+2. Connect the board and run `./flash.sh`. It detects the serial port; when
+   several are connected, it shows a numbered selector. Pass a port explicitly
+   (for example, `./flash.sh /dev/ttyACM0`) to skip selection.
+3. If uploading does not start, hold the board's BOOT button while connecting
+   it, then run the command again.
+
 If the screen is upside down, change LCD_ROTATION from 0 or 2 in
 VoidAscentGame.cpp.
