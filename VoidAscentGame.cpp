@@ -83,6 +83,7 @@ static Preferences preferences;
 // =============================================================================
 
 static constexpr uint32_t FRAME_INTERVAL_MS = 33;
+static constexpr float MAX_FRAME_DELTA_SECONDS = 0.08f;
 
 // Faster visual world movement.
 static constexpr float WORLD_PIXELS_PER_ALTITUDE = 5.80f;
@@ -251,6 +252,11 @@ static RandomGenerator randomGenerator;
 enum class FlightType : uint8_t { TEST_FLIGHT, OUTER_SPACE };
 
 static constexpr uint8_t MAX_STAGE_COUNT = 4;
+static constexpr float BASE_POWERED_SECONDS = 12.40f;
+static constexpr float EXTRA_POWERED_SECONDS_PER_STAGE = 0.75f;
+static constexpr float SURFACE_GRAVITY = 2.35f;
+static constexpr float LIFTOFF_VELOCITY = 1.35f;
+static constexpr float PERFECT_STAGE_VELOCITY_RETAINED = 0.995f;
 
 struct StageDefinition {
   const char *name;
@@ -288,7 +294,7 @@ struct MissionDefinition {
 
 // Unused array entries are zero-initialized, so a mission only lists its real
 // stages. More than MAX_STAGE_COUNT stages is a compile error.
-static const MissionDefinition MISSIONS[] = {
+static constexpr MissionDefinition MISSIONS[] = {
     {"T-01",
      "TEST FLIGHT",
      "VALIDATE THE STACK",
@@ -346,12 +352,19 @@ static const MissionDefinition MISSIONS[] = {
 
 static constexpr uint8_t MISSION_COUNT = sizeof(MISSIONS) / sizeof(MISSIONS[0]);
 
+#include "MissionValidation.h"
+
+static_assert(missionValidationAllTargetsReachable(MISSIONS),
+              "a mission target exceeds its ideal-flight apogee");
+
 class FlightTimingModel {
 public:
   float totalPoweredSeconds(const MissionDefinition &mission) const {
     // Two-, three- and four-stage stacks stay within a 12 percent total burn
     // range while giving higher-stage missions shorter individual windows.
-    return 12.40f + maxFloat(0.0f, mission.stageCount() - 2.0f) * 0.75f;
+    return BASE_POWERED_SECONDS +
+           maxFloat(0.0f, mission.stageCount() - 2.0f) *
+               EXTRA_POWERED_SECONDS_PER_STAGE;
   }
 
   float stageBurnSeconds(const MissionDefinition &mission,
@@ -3131,7 +3144,7 @@ static void separateCurrentStage() {
     snprintf(stageFeedback, sizeof(stageFeedback), "S%u PERFECT",
              separatedStage);
     setFeedback(stageFeedback, C_GREEN, 1.08f);
-    game.velocity *= 0.995f;
+    game.velocity *= PERFECT_STAGE_VELOCITY_RETAINED;
     game.score += 600;
     game.shake = 5.5f;
   } else {
@@ -3300,7 +3313,8 @@ static void continueCampaignFromResult() {
 // =============================================================================
 
 static float gravityAtAltitude(float altitude) {
-  return lerpFloat(2.35f, 1.45f, smoothStep(0.0f, 1500.0f, altitude));
+  return lerpFloat(SURFACE_GRAVITY, 1.45f,
+                   smoothStep(0.0f, 1500.0f, altitude));
 }
 
 static float atmosphereDensityAtAltitude(float altitude) {
@@ -3441,7 +3455,7 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
   if (game.phase == FlightPhase::COUNTDOWN) {
     if (phaseSeconds >= 3.0f) {
       setPhase(FlightPhase::BURNING);
-      game.velocity = 1.35f;
+      game.velocity = LIFTOFF_VELOCITY;
       setFeedback("LIFTOFF", C_YELLOW, 1.0f);
       game.shake = 7.0f;
       spawnSmokeBurst(86.0f, 267.0f, 34, 43.0f);
@@ -4509,8 +4523,8 @@ void voidAscentLoop() {
 
   float deltaSeconds = (now - lastFrameAt) / 1000.0f;
 
-  if (deltaSeconds > 0.08f) {
-    deltaSeconds = 0.08f;
+  if (deltaSeconds > MAX_FRAME_DELTA_SECONDS) {
+    deltaSeconds = MAX_FRAME_DELTA_SECONDS;
   }
 
   lastFrameAt = now;
