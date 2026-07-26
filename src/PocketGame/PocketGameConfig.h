@@ -1,0 +1,41 @@
+#pragma once
+
+#include <Arduino.h>
+
+// Central hardware profile for the Waveshare ESP32-C6 1.47-inch LCD board.
+// Games never include board pins directly. Change this file when the physical
+// controls, display, LED, or storage wiring changes.
+namespace pocketgame::config {
+
+static constexpr int8_t LCD_MOSI_PIN = 6;
+static constexpr int8_t LCD_SCLK_PIN = 7;
+static constexpr int8_t LCD_CS_PIN = 14;
+static constexpr int8_t LCD_DC_PIN = 15;
+static constexpr int8_t LCD_RESET_PIN = 21;
+static constexpr int8_t LCD_BACKLIGHT_PIN = 22;
+
+static constexpr int8_t RGB_LED_PIN = 8;
+static constexpr int8_t PRIMARY_BUTTON_PIN = 9;
+
+static constexpr int16_t SCREEN_WIDTH = 172;
+static constexpr int16_t SCREEN_HEIGHT = 320;
+static constexpr int16_t LCD_NATIVE_WIDTH = 172;
+static constexpr int16_t LCD_NATIVE_HEIGHT = 320;
+
+static constexpr uint8_t LCD_ROTATION = 2;
+static constexpr uint32_t LCD_SPI_HZ = 40000000UL;
+static constexpr uint8_t DISPLAY_BRIGHTNESS_PERCENT = 50;
+static constexpr uint8_t RGB_LED_BRIGHTNESS = 45;
+static constexpr bool RGB_LED_ENABLED = true;
+
+static constexpr uint16_t BUTTON_DEBOUNCE_MS = 22;
+static constexpr uint16_t BUTTON_HOLD_MS = 580;
+
+static constexpr uint8_t MAX_REGISTERED_GAMES = 8;
+static constexpr uint32_t SYSTEM_FRAME_INTERVAL_MS = 33;
+
+} // namespace pocketgame::config
+
+#ifndef POCKETGAME_ENABLE_SD_STORAGE
+#define POCKETGAME_ENABLE_SD_STORAGE 0
+#endif

@@ -1,6 +1,8 @@
 CompileFlags:
-  CompilationDatabase: build/esp32.esp32.esp32c6
-  Remove: [-fstrict-volatile-bitfields, -fno-tree-switch-conversion]
-
+  Add:
+    - -std=gnu++17
+    - -Isrc
+    - -Isrc/PocketGame
+    - -Isrc/Games/VoidAscent
 Diagnostics:
-  Suppress: [-Wc++11-narrowing]
+  UnusedIncludes: Strict

@@ -1,16 +1,9 @@
 #include <Adafruit_GFX.h>
-#include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
-#include <Arduino_GFX_Library.h>
-#include <Preferences.h>
 #include <cstdint>
 #include <esp_system.h>
 #include <math.h>
 #include <string.h>
-
-#if __has_include(<esp_arduino_version.h>)
-#include <esp_arduino_version.h>
-#endif
 
 #include "VoidAscentGame.h"
 
@@ -19,55 +12,30 @@
 #undef FALLING
 #endif
 
-// =============================================================================
-// Hardware
-// =============================================================================
+using pocketgame::MenuAction;
+using pocketgame::PocketGameSystem;
+using pocketgame::PocketLed;
+using pocketgame::ScreenNavigator;
 
-#define PIN_LCD_MOSI 6
-#define PIN_LCD_SCLK 7
-#define PIN_LCD_CS 14
-#define PIN_LCD_DC 15
-#define PIN_LCD_RST 21
-#define PIN_LCD_BL 22
+static PocketGameSystem *pocketSystem = nullptr;
 
-#define PIN_RGB_LED 8
-#define PIN_BUTTON 9
+static constexpr int16_t SCREEN_W = pocketgame::config::SCREEN_WIDTH;
+static constexpr int16_t SCREEN_H = pocketgame::config::SCREEN_HEIGHT;
 
-static constexpr int16_t SCREEN_W = 172;
-static constexpr int16_t SCREEN_H = 320;
-
-static constexpr int16_t LCD_NATIVE_W = 172;
-static constexpr int16_t LCD_NATIVE_H = 320;
-
-#define DISPLAY_BRIGHTNESS 50 // 0-100 percent
 #define ROCKET_POSITION_ADJUST_Y 25.0f
 #define ROCKET_POSITION_ADJUST_START_ALTITUDE 12.0f
 #define ROCKET_POSITION_ADJUST_TRANSITION_ALTITUDE 24.0f
 #define ROCKET_STAGE_ZOOM_PER_SEPARATION 0.26f
 #define ROCKET_MAX_SCALE 2.45f
 
-static_assert(DISPLAY_BRIGHTNESS >= 0 && DISPLAY_BRIGHTNESS <= 100,
-              "DISPLAY_BRIGHTNESS must be in the 0-100 range");
 static_assert(ROCKET_POSITION_ADJUST_Y >= -SCREEN_H &&
                   ROCKET_POSITION_ADJUST_Y <= SCREEN_H,
               "ROCKET_POSITION_ADJUST_Y must stay within one screen height");
 static_assert(ROCKET_POSITION_ADJUST_TRANSITION_ALTITUDE > 0.0f,
               "ROCKET_POSITION_ADJUST_TRANSITION_ALTITUDE must be positive");
 
-// Runtime switch for all onboard RGB status indication.
-static bool onboardLedEnabled = true;
-static constexpr uint8_t BACKLIGHT_CHANNEL = 0;
-
-#define LCD_ROTATION 2
-#define LCD_SPI_HZ 40000000UL
-
-Arduino_DataBus *lcdBus = new Arduino_ESP32SPI(
-    PIN_LCD_DC, PIN_LCD_CS, PIN_LCD_SCLK, PIN_LCD_MOSI, GFX_NOT_DEFINED);
-
-Arduino_GFX *gfx = new Arduino_ST7789(lcdBus, PIN_LCD_RST, LCD_ROTATION, true,
-                                      LCD_NATIVE_W, LCD_NATIVE_H, 34, 0, 34, 0);
-
-static GFXcanvas16 frame(SCREEN_W, SCREEN_H);
+// The game renders exclusively through the shared PocketDisplay frame buffer.
+#define frame (pocketSystem->display().canvas())
 
 // The assembled rocket is drawn upright into one local layer, then that
 // completed image is rotated once. This prevents independently rasterised
@@ -77,11 +45,7 @@ static constexpr int16_t ROCKET_LAYER_H = 288;
 static constexpr int16_t ROCKET_LAYER_PIVOT_X = ROCKET_LAYER_W / 2;
 static constexpr int16_t ROCKET_LAYER_PIVOT_Y = 128;
 static GFXcanvas16 rocketLayer(ROCKET_LAYER_W, ROCKET_LAYER_H);
-static Adafruit_GFX *rocketRenderTarget = &frame;
-
-static Adafruit_NeoPixel rgbLed(1, PIN_RGB_LED, NEO_GRB + NEO_KHZ800);
-
-static Preferences preferences;
+static Adafruit_GFX *rocketRenderTarget = nullptr;
 
 // =============================================================================
 // Timing and camera
@@ -473,70 +437,6 @@ public:
   }
 };
 
-struct ButtonEvents {
-  bool pressed = false;
-  bool released = false;
-  bool tapped = false;
-  bool held = false;
-};
-
-struct OneButton {
-  bool stableDown = false;
-  bool rawDown = false;
-  bool holdSent = false;
-
-  uint32_t changedAt = 0;
-  uint32_t pressedAt = 0;
-
-  ButtonEvents events;
-
-  void begin() {
-    pinMode(PIN_BUTTON, INPUT_PULLUP);
-
-    stableDown = digitalRead(PIN_BUTTON) == LOW;
-
-    rawDown = stableDown;
-    changedAt = millis();
-  }
-
-  void clearEvents() {
-    events.pressed = false;
-    events.released = false;
-    events.tapped = false;
-    events.held = false;
-  }
-
-  void update(uint32_t now) {
-    bool reading = digitalRead(PIN_BUTTON) == LOW;
-
-    if (reading != rawDown) {
-      rawDown = reading;
-      changedAt = now;
-    }
-
-    if (reading != stableDown && now - changedAt >= 22) {
-      stableDown = reading;
-
-      if (stableDown) {
-        pressedAt = now;
-        holdSent = false;
-        events.pressed = true;
-      } else {
-        events.released = true;
-
-        if (!holdSent && now - pressedAt < 580) {
-          events.tapped = true;
-        }
-      }
-    }
-
-    if (stableDown && !holdSent && now - pressedAt >= 580) {
-      holdSent = true;
-      events.held = true;
-    }
-  }
-};
-
 struct Particle : public SceneObject {
   bool active = false;
 
@@ -652,11 +552,11 @@ struct PointF {
 };
 
 struct GameState {
-  ScreenMode screen = ScreenMode::SPLASH;
+  ScreenNavigator<ScreenMode> screens{ScreenMode::SPLASH};
+  pocketgame::MenuNavigator missionMenu;
 
   FlightPhase phase = FlightPhase::COUNTDOWN;
 
-  uint32_t screenStartedAt = 0;
   uint32_t phaseStartedAt = 0;
 
   uint8_t selectedMission = 0;
@@ -704,7 +604,6 @@ struct GameState {
   float explosionY = 150.0f;
 };
 
-static OneButton button;
 static GameState game;
 
 static constexpr uint8_t MAX_PARTICLES = 112;
@@ -894,9 +793,9 @@ static void drawRotatedRectangleOutline(float centreX, float centreY,
 // =============================================================================
 
 static void loadProgress() {
-  preferences.begin("voidascent", false);
+  pocketgame::PocketStorage &storage = pocketSystem->storage();
 
-  game.unlockedMissions = preferences.getUChar("unlocked", 1);
+  game.unlockedMissions = storage.getUInt8("unlocked", 1);
 
   if (game.unlockedMissions < 1) {
     game.unlockedMissions = 1;
@@ -906,7 +805,7 @@ static void loadProgress() {
     game.unlockedMissions = MISSION_COUNT;
   }
 
-  uint8_t savedMission = preferences.getUChar("current", 0);
+  uint8_t savedMission = storage.getUInt8("current", 0);
 
   if (savedMission >= game.unlockedMissions) {
     savedMission = game.unlockedMissions - 1;
@@ -917,50 +816,45 @@ static void loadProgress() {
   }
 
   game.selectedMission = savedMission;
+  game.missionMenu.reset(game.unlockedMissions, game.selectedMission);
 
   for (uint8_t index = 0; index < MISSION_COUNT; index++) {
     char key[10];
-
     snprintf(key, sizeof(key), "best%u", index);
-
-    game.bestScores[index] = preferences.getInt(key, 0);
+    game.bestScores[index] = storage.getInt32(key, 0);
   }
 }
 
 static void saveMissionProgress() {
-  uint8_t missionIndex = game.selectedMission;
+  pocketgame::PocketStorage &storage = pocketSystem->storage();
+  const uint8_t missionIndex = game.selectedMission;
 
   if (game.score > game.bestScores[missionIndex]) {
     game.bestScores[missionIndex] = game.score;
 
     char key[10];
-
     snprintf(key, sizeof(key), "best%u", missionIndex);
-
-    preferences.putInt(key, game.score);
+    storage.putInt32(key, game.score);
   }
 
   if (!game.success) {
-    preferences.putUChar("current", game.selectedMission);
-
+    storage.putUInt8("current", game.selectedMission);
     return;
   }
 
   if (missionIndex + 1 < MISSION_COUNT) {
-    uint8_t nextMission = missionIndex + 1;
-
-    uint8_t requiredUnlockCount = nextMission + 1;
+    const uint8_t nextMission = missionIndex + 1;
+    const uint8_t requiredUnlockCount = nextMission + 1;
 
     if (requiredUnlockCount > game.unlockedMissions) {
       game.unlockedMissions = requiredUnlockCount;
-
-      preferences.putUChar("unlocked", game.unlockedMissions);
+      storage.putUInt8("unlocked", game.unlockedMissions);
     }
 
     // Resume on the newly unlocked mission after reboot.
-    preferences.putUChar("current", nextMission);
+    storage.putUInt8("current", nextMission);
   } else {
-    preferences.putUChar("current", missionIndex);
+    storage.putUInt8("current", missionIndex);
   }
 }
 
@@ -2587,7 +2481,7 @@ static EngineGeometry engineGeometryFor(const StageGeometry &stage,
 
   return {
       (int16_t)roundf(stage.x + stage.width * 0.5f),
-      stageBottomY - scaledSize(1.0f, scale),
+      (int16_t)(stageBottomY - scaledSize(1.0f, scale)),
       (int16_t)(stageBottomY - scaledSize(1.0f, scale) + bellHeight),
       maxInt16(scaledSize(5.0f, scale, 3), (int16_t)roundf(stageWidth * 0.22f)),
       maxInt16(scaledSize(9.0f, scale, 5),
@@ -3247,10 +3141,12 @@ static void separateCurrentStage() {
 // =============================================================================
 
 static void setScreen(ScreenMode screen) {
-  game.screen = screen;
-  game.screenStartedAt = millis();
+  game.screens.goTo(screen, millis());
+  pocketSystem->controls().consume();
 
-  button.clearEvents();
+  if (screen == ScreenMode::BRIEFING) {
+    game.missionMenu.reset(game.unlockedMissions, game.selectedMission);
+  }
 }
 
 static void setPhase(FlightPhase phase) {
@@ -3337,9 +3233,8 @@ static void continueCampaignFromResult() {
       game.unlockedMissions = game.selectedMission + 1;
     }
 
-    preferences.putUChar("current", game.selectedMission);
-
-    preferences.putUChar("unlocked", game.unlockedMissions);
+    pocketSystem->storage().putUInt8("current", game.selectedMission);
+    pocketSystem->storage().putUInt8("unlocked", game.unlockedMissions);
 
     setScreen(ScreenMode::BRIEFING);
 
@@ -3695,40 +3590,37 @@ static void updateFlight(float deltaSeconds, uint32_t now) {
 // =============================================================================
 
 static void updateScreenInput() {
-  if (game.screen == ScreenMode::SPLASH) {
-    if (button.events.tapped) {
+  const pocketgame::ControlEvents &controls = pocketSystem->controls().events();
+
+  if (game.screens.is(ScreenMode::SPLASH)) {
+    if (controls.select) {
       setScreen(ScreenMode::BRIEFING);
     }
-
     return;
   }
 
-  if (game.screen == ScreenMode::BRIEFING) {
-    if (button.events.held) {
-      game.selectedMission = (game.selectedMission + 1) % game.unlockedMissions;
+  if (game.screens.is(ScreenMode::BRIEFING)) {
+    game.missionMenu.setItemCount(game.unlockedMissions);
+    const MenuAction action = game.missionMenu.update(controls);
+    game.selectedMission = game.missionMenu.selected();
 
-      game.screenStartedAt = millis();
-    }
-
-    if (button.events.tapped) {
+    if (action == MenuAction::CYCLED) {
+      game.screens.refresh(millis());
+    } else if (action == MenuAction::SELECTED) {
       startMission();
     }
-
     return;
   }
 
-  if (game.screen == ScreenMode::FLIGHT) {
-    if (button.events.pressed && game.phase == FlightPhase::BURNING) {
+  if (game.screens.is(ScreenMode::FLIGHT)) {
+    if (controls.actionPressed && game.phase == FlightPhase::BURNING) {
       separateCurrentStage();
     }
-
     return;
   }
 
-  if (game.screen == ScreenMode::RESULT) {
-    if (button.events.tapped) {
-      continueCampaignFromResult();
-    }
+  if (game.screens.is(ScreenMode::RESULT) && controls.select) {
+    continueCampaignFromResult();
   }
 }
 
@@ -4047,7 +3939,7 @@ static void drawFlightScreen(uint32_t now) {
 // =============================================================================
 
 static void drawSplashScreen(uint32_t now) {
-  uint32_t elapsed = now - game.screenStartedAt;
+  uint32_t elapsed = now - game.screens.changedAt();
 
   drawBackground(0.0f, 0.0f, now, MISSIONS[game.selectedMission].flightType,
                  false);
@@ -4072,7 +3964,7 @@ static void drawSplashScreen(uint32_t now) {
 
   frame.drawFastVLine(20, 38, 64, C_OCEAN_LIGHT);
 
-  drawTextLeft("TINY CONSOLE", 28, 39, 1, C_MUTED);
+  drawTextLeft("TINY CONSOLE - v0.0.2", 28, 39, 1, C_MUTED);
 
   drawTextLeft("VOID", 28, 55, 3, C_WHITE);
 
@@ -4274,7 +4166,7 @@ static void applyFrameShake(uint32_t now) {
 static void renderFrame(uint32_t now) {
   frame.fillScreen(C_BLACK);
 
-  switch (game.screen) {
+  switch (game.screens.current()) {
   case ScreenMode::SPLASH:
     drawSplashScreen(now);
     break;
@@ -4294,7 +4186,7 @@ static void renderFrame(uint32_t now) {
 
   applyFrameShake(now);
 
-  gfx->draw16bitRGBBitmap(0, 0, frame.getBuffer(), SCREEN_W, SCREEN_H);
+  pocketSystem->display().present();
 }
 
 // =============================================================================
@@ -4303,37 +4195,30 @@ static void renderFrame(uint32_t now) {
 
 class StatusLedController {
 public:
-  explicit StatusLedController(Adafruit_NeoPixel &pixel) : pixel(pixel) {}
-
-  void begin() {
-    pixel.begin();
-    pixel.setBrightness(45);
-    pixel.clear();
-    pixel.show();
-    lastColour = 0xFFFFFFFFU;
+  void begin(PocketLed &led) {
+    led_ = &led;
+    led_->off();
   }
 
-  void showHardwareFault(bool lit) { set(lit ? 240 : 0, 0, 0); }
-
   void update(uint32_t now) {
-    if (game.screen == ScreenMode::SPLASH) {
-      uint8_t pulse = breathe(now, 1550, 28, 150);
+    if (game.screens.is(ScreenMode::SPLASH)) {
+      uint8_t pulse = PocketLed::breatheValue(now, 1550, 28, 150);
       set(0, pulse / 2, pulse);
       return;
     }
 
-    if (game.screen == ScreenMode::BRIEFING) {
-      uint8_t pulse = breathe(now, 1800, 24, 120);
+    if (game.screens.is(ScreenMode::BRIEFING)) {
+      uint8_t pulse = PocketLed::breatheValue(now, 1800, 24, 120);
       set(pulse / 4, pulse / 2, pulse);
       return;
     }
 
-    if (game.screen == ScreenMode::RESULT) {
+    if (game.screens.is(ScreenMode::RESULT)) {
       if (game.success) {
-        uint8_t pulse = breathe(now, 1150, 35, 190);
+        uint8_t pulse = PocketLed::breatheValue(now, 1150, 35, 190);
         set(0, pulse, pulse / 4);
       } else {
-        bool lit = doubleBlink(now, 980);
+        bool lit = PocketLed::doubleBlink(now, 980);
         set(lit ? 230 : 18, 0, 0);
       }
       return;
@@ -4378,20 +4263,20 @@ public:
         bool lit = ((now / 155U) & 1U) == 0;
         set(lit ? 210 : 42, lit ? 92 : 12, 0);
       } else {
-        uint8_t pulse = breathe(now, 720, 75, 155);
+        uint8_t pulse = PocketLed::breatheValue(now, 720, 75, 155);
         set(0, pulse, pulse + 55);
       }
       break;
     }
 
     case FlightPhase::COASTING: {
-      uint8_t pulse = breathe(now, 1350, 22, 145);
+      uint8_t pulse = PocketLed::breatheValue(now, 1350, 22, 145);
       set(0, pulse / 2, pulse);
       break;
     }
 
     case FlightPhase::APOGEE: {
-      uint8_t pulse = breathe(now, 900, 45, 205);
+      uint8_t pulse = PocketLed::breatheValue(now, 900, 45, 205);
       set(pulse / 2, pulse, pulse / 2);
       break;
     }
@@ -4403,13 +4288,13 @@ public:
     }
 
     case FlightPhase::RECOVERY: {
-      uint8_t pulse = breathe(now, 1200, 42, 175);
+      uint8_t pulse = PocketLed::breatheValue(now, 1200, 42, 175);
       set(0, pulse, pulse / 2);
       break;
     }
 
     case FlightPhase::DEPLOYMENT: {
-      uint8_t pulse = breathe(now, 780, 45, 185);
+      uint8_t pulse = PocketLed::breatheValue(now, 780, 45, 185);
       set(pulse / 2, 0, pulse);
       break;
     }
@@ -4420,7 +4305,7 @@ public:
     }
 
     case FlightPhase::DESCENDING: {
-      bool lit = doubleBlink(now, 820);
+      bool lit = PocketLed::doubleBlink(now, 820);
       set(lit ? 230 : 15, lit ? 12 : 0, 0);
       break;
     }
@@ -4428,130 +4313,40 @@ public:
   }
 
 private:
-  Adafruit_NeoPixel &pixel;
-  uint32_t lastColour = 0xFFFFFFFFU;
-
-  static uint8_t breathe(uint32_t now, uint16_t period, uint8_t minimum,
-                         uint8_t maximum) {
-    float phase = (now % period) / (float)period * 6.2831853f;
-    float amount = sinf(phase) * 0.5f + 0.5f;
-    return minimum + (uint8_t)((maximum - minimum) * amount);
-  }
-
-  static bool doubleBlink(uint32_t now, uint16_t period) {
-    uint16_t phase = now % period;
-    return phase < 95 || (phase >= 175 && phase < 285);
-  }
+  PocketLed *led_ = nullptr;
 
   void set(uint8_t red, uint8_t green, uint8_t blue) {
-    if (!onboardLedEnabled) {
-      red = 0;
-      green = 0;
-      blue = 0;
+    if (led_ != nullptr) {
+      led_->set(red, green, blue);
     }
-
-    uint32_t colour = pixel.Color(red, green, blue);
-    if (colour == lastColour) {
-      return;
-    }
-
-    lastColour = colour;
-    pixel.setPixelColor(0, colour);
-    pixel.show();
   }
 };
 
-static StatusLedController statusLed(rgbLed);
+static StatusLedController statusLed;
 
 // =============================================================================
-// Backlight
+// IGame entry points
 // =============================================================================
 
-static uint8_t displayBrightnessDuty(uint8_t percentage) {
-  uint16_t clamped = percentage > 100 ? 100 : percentage;
-
-  if (clamped == 0) {
-    return 0;
-  }
-
-  // Perceptual quadratic mapping. The public value is a true 0-100 percent;
-  // PWM is calculated only here so 50% does not look almost fully bright.
-  uint32_t squared = (uint32_t)clamped * (uint32_t)clamped;
-  uint8_t duty = (uint8_t)((squared * 255U + 5000U) / 10000U);
-  return maxInt16((int16_t)2, (int16_t)duty);
-}
-
-static void initializeBacklight() {
-  uint8_t duty = displayBrightnessDuty(DISPLAY_BRIGHTNESS);
-
-#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-  ledcAttach(PIN_LCD_BL, 5000, 8);
-  ledcWrite(PIN_LCD_BL, duty);
-#else
-  ledcSetup(BACKLIGHT_CHANNEL, 5000, 8);
-  ledcAttachPin(PIN_LCD_BL, BACKLIGHT_CHANNEL);
-  ledcWrite(BACKLIGHT_CHANNEL, duty);
-#endif
-}
-
-// =============================================================================
-// Public entry points
-// =============================================================================
-
-void voidAscentSetup() {
-  Serial.begin(115200);
+void VoidAscentGame::begin(PocketGameSystem &system) {
+  pocketSystem = &system;
+  rocketRenderTarget = &frame;
 
   randomGenerator.state = esp_random();
-
-  button.begin();
-
-  statusLed.begin();
-
-  initializeBacklight();
-
-  if (!gfx->begin(LCD_SPI_HZ)) {
-    Serial.println("LCD initialization failed.");
-
-    while (true) {
-      statusLed.showHardwareFault(true);
-
-      delay(160);
-
-      statusLed.showHardwareFault(false);
-
-      delay(160);
-    }
-  }
-
-  gfx->fillScreen(C_BLACK);
+  statusLed.begin(system.led());
 
   frame.setTextWrap(false);
-
   initializeSceneSeeds();
   loadProgress();
-
   setScreen(ScreenMode::SPLASH);
 
   lastFrameAt = millis();
-
   Serial.println("VOID ASCENT campaign build started.");
 }
 
-void voidAscentLoop() {
-  uint32_t now = millis();
-
-  button.update(now);
+void VoidAscentGame::loop(PocketGameSystem &system, uint32_t now) {
+  pocketSystem = &system;
   updateScreenInput();
-
-  // Consume edge events immediately. Otherwise one press can be processed
-  // repeatedly during the several loop iterations between rendered frames.
-  button.clearEvents();
-
-  // auto transition to briefing after 3.9 seconds
-  // if (game.screen == ScreenMode::SPLASH && now - game.screenStartedAt > 3900)
-  // {
-  //   setScreen(ScreenMode::BRIEFING);
-  // }
 
   if (now - lastFrameAt < FRAME_INTERVAL_MS) {
     statusLed.update(now);
@@ -4560,14 +4355,13 @@ void voidAscentLoop() {
   }
 
   float deltaSeconds = (now - lastFrameAt) / 1000.0f;
-
   if (deltaSeconds > MAX_FRAME_DELTA_SECONDS) {
     deltaSeconds = MAX_FRAME_DELTA_SECONDS;
   }
 
   lastFrameAt = now;
 
-  if (game.screen == ScreenMode::FLIGHT) {
+  if (game.screens.is(ScreenMode::FLIGHT)) {
     updateFlight(deltaSeconds, now);
   }
 

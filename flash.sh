@@ -43,11 +43,10 @@ if [[ -z "$port" ]]; then
   esac
 fi
 
+mkdir -p "$BUILD_DIR"
 echo "Compiling for $FQBN..."
-if ! arduino-cli compile --fqbn "$FQBN" --build-path "$BUILD_DIR" "$SCRIPT_DIR"; then
-  echo "Compilation failed; nothing was flashed." >&2
-  exit 1
-fi
+arduino-cli compile --fqbn "$FQBN" --build-path "$BUILD_DIR" "$SCRIPT_DIR"
 
 echo "Flashing $port..."
-arduino-cli upload --fqbn "$FQBN" --port "$port" --input-dir "$BUILD_DIR" "$SCRIPT_DIR"
+arduino-cli upload --fqbn "$FQBN" --port "$port" \
+  --input-dir "$BUILD_DIR" "$SCRIPT_DIR"

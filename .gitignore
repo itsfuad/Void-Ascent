@@ -1,5 +1,5 @@
-*.bak
-/gameplay
-graphify-out
-build
-.zed
+build/
+*.bin
+*.elf
+*.map
+.DS_Store
