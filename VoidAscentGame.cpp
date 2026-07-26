@@ -47,8 +47,12 @@ static constexpr int16_t SCREEN_H = 320;
 static constexpr int16_t LCD_NATIVE_W = 172;
 static constexpr int16_t LCD_NATIVE_H = 320;
 
-// User-facing display brightness percentage. Keep this in the 0-100 range.
-static uint8_t displayBrightness = 80; // 0-100 percent
+#define DISPLAY_BRIGHTNESS 80 // 0-100 percent
+#define ROCKET_POSITION_ADJUST_X 0.0f
+#define ROCKET_POSITION_ADJUST_Y 0.0f
+#define ROCKET_STAGE_ZOOM_PER_SEPARATION 0.16f
+#define ROCKET_MAX_SCALE 1.45f
+
 // Runtime switch for all onboard RGB status indication.
 static bool onboardLedEnabled = true;
 static constexpr uint8_t BACKLIGHT_CHANNEL = 0;
@@ -277,6 +281,7 @@ struct MissionDefinition {
   const char *objectiveLine2;
 
   uint16_t targetAltitude;
+  uint16_t displayTargetAltitude;
   bool recoverCapsule;
 
   FlightType flightType;
@@ -299,11 +304,12 @@ struct MissionDefinition {
 // commas inside one macro argument.
 #define STAGE(name, width, height, thrust, bandColour) \
   StageDefinition{name, width, height, thrust, bandColour}
-#define CREATE_MISSION(code, name, objective1, objective2, target, recover, \
-                       flightType, ...)                                     \
+#define CREATE_MISSION(code, name, objective1, objective2, target, display, \
+                       recover, flightType, ...)                             \
   []() constexpr {                                                           \
     constexpr MissionDefinition mission = {                                  \
-        code, name, objective1, objective2, target, recover, flightType,    \
+        code, name, objective1, objective2, target, display, recover,       \
+        flightType,                                                           \
         {__VA_ARGS__}};                                                       \
     static_assert(missionValidationCanReachTarget(mission),                  \
                   code " target altitude exceeds its ideal-flight apogee"); \
@@ -313,37 +319,61 @@ struct MissionDefinition {
 static constexpr MissionDefinition MISSIONS[] = {
     CREATE_MISSION(
         "T-01", "TEST FLIGHT", "VALIDATE THE STACK", "RECOVER THE CAPSULE",
-        420, true, FlightType::TEST_FLIGHT,
+        320, 45, true, FlightType::TEST_FLIGHT,
         STAGE("BOOSTER", 31, 68, 7.00f, C_ORANGE),
         STAGE("UPPER", 22, 50, 5.70f, C_CYAN)),
 
     CREATE_MISSION(
         "K-100", "KARMAN RUN", "CROSS OUTER SPACE", "PAYLOAD CONTINUES",
-        480, false, FlightType::OUTER_SPACE,
+        520, 85, false, FlightType::OUTER_SPACE,
         STAGE("BOOSTER", 32, 70, 7.40f, C_ORANGE),
         STAGE("UPPER", 23, 53, 6.10f, C_BLUE)),
 
     CREATE_MISSION(
         "P-180", "ORBITAL PROBE", "REACH HIGH SPACE", "DEPLOY THE PROBE",
-        700, false, FlightType::OUTER_SPACE,
+        760, 135, false, FlightType::OUTER_SPACE,
         STAGE("BOOSTER", 33, 66, 8.20f, C_ORANGE),
         STAGE("CORE", 25, 50, 7.10f, C_BLUE),
         STAGE("UPPER", 18, 38, 6.10f, C_PURPLE)),
 
     CREATE_MISSION(
         "C-220", "CREW QUAL", "COMPLETE CREW ASCENT", "RECOVER THE CAPSULE",
-        800, true, FlightType::OUTER_SPACE,
+        1000, 190, true, FlightType::OUTER_SPACE,
         STAGE("BOOSTER", 34, 68, 8.50f, C_ORANGE),
         STAGE("CORE", 26, 52, 7.30f, C_BLUE),
         STAGE("UPPER", 19, 39, 6.20f, C_GREEN)),
 
     CREATE_MISSION(
         "H-340", "HEAVY ASCENT", "FOUR-STAGE FLIGHT", "REACH DEEP SPACE",
-        1050, false, FlightType::OUTER_SPACE,
+        1350, 260, false, FlightType::OUTER_SPACE,
         STAGE("BOOSTER", 35, 58, 9.40f, C_ORANGE),
         STAGE("CORE", 29, 46, 8.10f, C_BLUE),
         STAGE("UPPER", 23, 36, 7.00f, C_GREEN),
         STAGE("KICK", 17, 28, 6.10f, C_PURPLE)),
+
+    CREATE_MISSION(
+        "V-520", "VOID RELAY", "CROSS THE VOID", "SEND THE SIGNAL",
+        1750, 340, false, FlightType::OUTER_SPACE,
+        STAGE("BOOSTER", 36, 60, 10.20f, C_ORANGE),
+        STAGE("CORE", 30, 48, 9.00f, C_BLUE),
+        STAGE("UPPER", 24, 37, 7.80f, C_GREEN),
+        STAGE("KICK", 18, 27, 6.80f, C_PURPLE)),
+
+    CREATE_MISSION(
+        "D-760", "DEEP RANGE", "REACH THE DARK SIDE", "NO RECOVERY WINDOW",
+        2250, 440, false, FlightType::OUTER_SPACE,
+        STAGE("BOOSTER", 37, 58, 11.20f, C_ORANGE),
+        STAGE("CORE", 31, 46, 9.90f, C_BLUE),
+        STAGE("UPPER", 25, 35, 8.70f, C_GREEN),
+        STAGE("KICK", 18, 25, 7.60f, C_PURPLE)),
+
+    CREATE_MISSION(
+        "X-1000", "FINAL ASCENT", "MAXIMUM ALTITUDE", "TOUCH THE VOID",
+        2800, 560, false, FlightType::OUTER_SPACE,
+        STAGE("BOOSTER", 38, 56, 12.40f, C_ORANGE),
+        STAGE("CORE", 32, 44, 11.00f, C_BLUE),
+        STAGE("UPPER", 26, 33, 9.80f, C_GREEN),
+        STAGE("KICK", 19, 24, 8.70f, C_PURPLE)),
 };
 
 #undef CREATE_MISSION
@@ -1427,9 +1457,7 @@ static const MissionDefinition &currentMission() {
 }
 
 static float missionDisplayTargetAltitude() {
-  static const float DISPLAY_TARGETS[] = {45.0f, 100.0f, 180.0f, 220.0f,
-                                          340.0f};
-  return DISPLAY_TARGETS[game.selectedMission];
+  return currentMission().displayTargetAltitude;
 }
 
 static float missionProgressAt(float internalAltitude) {
@@ -1546,7 +1574,7 @@ static float currentRocketNoseY() {
 static void scaleRocketGeometry(RocketGeometry &geometry, float scale) {
   // Apply the sole rocket cinematic transform in screen space, around the
   // complete remaining vehicle's visual centre.
-  scale = clampFloat(scale, 0.65f, 1.0f);
+  scale = clampFloat(scale, 0.65f, ROCKET_MAX_SCALE);
 
   float anchorX = SCREEN_W * 0.5f;
   float anchorY = (geometry.noseY + geometry.bottomY) * 0.5f;
@@ -1570,15 +1598,29 @@ static void scaleRocketGeometry(RocketGeometry &geometry, float scale) {
 }
 
 static void buildCurrentRocketGeometry(RocketGeometry &geometry) {
-  buildRocketGeometryFor(currentMission(), game.activeStage,
-                         currentRocketNoseY(), geometry);
+  const MissionDefinition &mission = currentMission();
+  buildRocketGeometryFor(mission, game.activeStage, currentRocketNoseY(),
+                         geometry);
   SceneProjection projection =
       sceneProjectionModel.atAltitude(displayedAltitudeAt(game.altitude));
-  scaleRocketGeometry(geometry, projection.rocketScale);
-  float pathOffsetX = projection.rocketCentreX - SCREEN_W * 0.5f;
-  geometry.payloadX += pathOffsetX;
+  uint8_t separatedStages = game.activeStage;
+  uint8_t finalStage = mission.stageCount() - 1;
+  if (separatedStages > finalStage) {
+    separatedStages = finalStage;
+  }
+  float stageZoom = 1.0f + separatedStages * ROCKET_STAGE_ZOOM_PER_SEPARATION;
+  scaleRocketGeometry(geometry, projection.rocketScale * stageZoom);
+
+  float offsetX = projection.rocketCentreX - SCREEN_W * 0.5f +
+                  ROCKET_POSITION_ADJUST_X;
+  float offsetY = ROCKET_POSITION_ADJUST_Y;
+  geometry.payloadX += offsetX;
+  geometry.payloadY += offsetY;
+  geometry.noseY += offsetY;
+  geometry.bottomY += offsetY;
   for (uint8_t index = 0; index < geometry.stageCount; index++) {
-    geometry.stages[index].x += pathOffsetX;
+    geometry.stages[index].x += offsetX;
+    geometry.stages[index].y += offsetY;
   }
   geometry.pitchRadians = projection.rocketPitchRadians;
 }
@@ -2907,7 +2949,7 @@ static void setFeedback(const char *message, uint16_t colour, float duration) {
 
 static void createWholeDetachedStage(const StageDefinition &definition,
                                      const StageGeometry &geometry,
-                                     float fuelFraction,
+                                     float fuelFraction, float visualScale,
                                      const RocketTransform &transform) {
   int16_t bandPosition =
       maxInt16((int16_t)5, (int16_t)(geometry.height / 5.0f));
@@ -2921,7 +2963,7 @@ static void createWholeDetachedStage(const StageDefinition &definition,
       transform.angle, side * randomGenerator.range(0.28f, 0.52f), 5.2f,
       definition.bandColour, fuelFraction, (int8_t)bandPosition);
 
-  float physicalScale = maxFloat(0.65f, currentRocketVisualScale());
+  float physicalScale = maxFloat(0.65f, visualScale);
   float physicalWidth = geometry.width / physicalScale;
   float physicalHeight = geometry.height / physicalScale;
   stage->mass =
@@ -3151,7 +3193,8 @@ static void separateCurrentStage() {
 
   // Create the detached body after applying the staging result so both bodies
   // inherit the same post-separation trajectory before the mass-based impulse.
-  createWholeDetachedStage(*stage, activeGeometry, remainingFuel, transform);
+  createWholeDetachedStage(*stage, activeGeometry, remainingFuel,
+                           geometry.visualScale, transform);
 
   game.activeStage++;
   game.stageElapsed = 0.0f;
@@ -4434,11 +4477,7 @@ static uint8_t displayBrightnessDuty(uint8_t percentage) {
 }
 
 static void initializeBacklight() {
-  if (displayBrightness > 100) {
-    displayBrightness = 100;
-  }
-
-  uint8_t duty = displayBrightnessDuty(displayBrightness);
+  uint8_t duty = displayBrightnessDuty(DISPLAY_BRIGHTNESS);
 
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcAttach(PIN_LCD_BL, 5000, 8);
