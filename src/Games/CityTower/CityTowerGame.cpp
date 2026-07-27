@@ -1068,42 +1068,85 @@ static void handleInput(uint32_t now) {
 }
 
 static void drawSky(uint32_t now, bool gameScene) {
-  const float nightAmount = gameScene
-                                ? clampFloat((city.floorCount - 12.0f) / 18.0f,
-                                             0.0f, 1.0f)
-                                : 0.0f;
+  const float nightAmount =
+      gameScene
+          ? clampFloat((city.floorCount - 10.0f) / 20.0f, 0.0f, 1.0f)
+          : 0.0f;
+
   for (int16_t y = 0; y < SCREEN_H; y += 12) {
     const float vertical = y / (float)SCREEN_H;
-    uint16_t day = blend565(C_SKY_HIGH, C_SKY, (uint8_t)(vertical * 220.0f));
-    uint16_t night = blend565(C_NIGHT, C_DUSK,
-                              (uint8_t)(vertical * 150.0f));
+    const uint16_t day =
+        blend565(C_SKY_HIGH, C_SKY, (uint8_t)(vertical * 220.0f));
+    const uint16_t night =
+        blend565(C_NIGHT, C_DUSK, (uint8_t)(vertical * 150.0f));
     frame.fillRect(0, y, SCREEN_W, 12,
                    blend565(day, night, (uint8_t)(nightAmount * 255.0f)));
   }
 
-  if (nightAmount < 0.55f) {
-    frame.fillCircle(140, 74, 14, C_GOLD);
-    frame.fillCircle(136, 70, 9, C565(255, 227, 123));
-  } else {
-    frame.fillCircle(139, 68, 11, C_WHITE);
-    frame.fillCircle(134, 64, 10, C_NIGHT);
+  // Celestial bodies follow separate arcs and cross-fade. The previous code
+  // held the sun in one fixed position, then replaced it with the moon in a
+  // single frame, which made the day/night change look artificial.
+  const float sunTravel = clampFloat(nightAmount / 0.68f, 0.0f, 1.0f);
+  const float sunVisibility =
+      1.0f - clampFloat((nightAmount - 0.34f) / 0.34f, 0.0f, 1.0f);
+  const int16_t sunX = (int16_t)roundf(142.0f - sunTravel * 70.0f);
+  const int16_t sunY =
+      (int16_t)roundf(67.0f + sunTravel * sunTravel * 105.0f);
+
+  if (sunVisibility > 0.02f) {
+    const uint16_t outer =
+        blend565(C_SKY, C_GOLD, (uint8_t)(sunVisibility * 255.0f));
+    const uint16_t inner =
+        blend565(C_SKY, C565(255, 227, 123),
+                 (uint8_t)(sunVisibility * 255.0f));
+    frame.fillCircle(sunX, sunY, 14, outer);
+    frame.fillCircle(sunX - 4, sunY - 4, 9, inner);
+  }
+
+  const float moonRise =
+      clampFloat((nightAmount - 0.24f) / 0.76f, 0.0f, 1.0f);
+  const float moonVisibility =
+      clampFloat((nightAmount - 0.24f) / 0.34f, 0.0f, 1.0f);
+  const int16_t moonX = (int16_t)roundf(176.0f - moonRise * 39.0f);
+  const int16_t moonY =
+      (int16_t)roundf(134.0f - sinf(moonRise * 1.5707963f) * 67.0f);
+
+  if (moonVisibility > 0.02f) {
+    const uint16_t moonColour =
+        blend565(C_DUSK, C_WHITE, (uint8_t)(moonVisibility * 255.0f));
+    const uint16_t cutout =
+        blend565(C_DUSK, C_NIGHT, (uint8_t)(moonVisibility * 255.0f));
+    frame.fillCircle(moonX, moonY, 11, moonColour);
+    frame.fillCircle(moonX - 5, moonY - 4, 10, cutout);
+  }
+
+  const uint8_t starVisibility =
+      (uint8_t)(clampFloat((nightAmount - 0.34f) / 0.46f, 0.0f, 1.0f) *
+                255.0f);
+  if (starVisibility > 0) {
     for (uint8_t index = 0; index < 18; ++index) {
       const int16_t x = (index * 43 + 11) % SCREEN_W;
       const int16_t y = (index * 61 + 19) % 185;
       if (((now / 280U + index) & 3U) != 0) {
-        frame.drawPixel(x, y, C_WHITE);
+        const uint16_t star = blend565(C_NIGHT, C_WHITE, starVisibility);
+        frame.drawPixel(x, y, star);
       }
     }
   }
 
   const int16_t drift = (int16_t)((now / 90U) % 230U) - 30;
   for (uint8_t index = 0; index < 4; ++index) {
-    int16_t x = (drift + index * 68) % 230 - 30;
-    int16_t y = 88 + index * 27;
-    frame.fillCircle(x, y, 8, C_CLOUD_SHADE);
-    frame.fillCircle(x + 8, y - 3, 10, C_CLOUD);
-    frame.fillCircle(x + 19, y + 1, 7, C_CLOUD);
-    frame.fillRect(x, y, 21, 7, C_CLOUD);
+    const int16_t x = (drift + index * 68) % 230 - 30;
+    const int16_t y = 88 + index * 27;
+    const uint16_t cloudShade =
+        blend565(C_CLOUD_SHADE, C_DUSK,
+                 (uint8_t)(nightAmount * 180.0f));
+    const uint16_t cloud =
+        blend565(C_CLOUD, C_DUSK, (uint8_t)(nightAmount * 150.0f));
+    frame.fillCircle(x, y, 8, cloudShade);
+    frame.fillCircle(x + 8, y - 3, 10, cloud);
+    frame.fillCircle(x + 19, y + 1, 7, cloud);
+    frame.fillRect(x, y, 21, 7, cloud);
   }
 }
 
