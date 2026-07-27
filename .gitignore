@@ -3,3 +3,9 @@ build/
 *.elf
 *.map
 .DS_Store
+
+# Local media sources and generated PocketGame videos
+video_src/*
+!video_src/README.txt
+!video_src/.gitkeep
+videos/*.pgv

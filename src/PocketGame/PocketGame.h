@@ -3,6 +3,7 @@
 #include "PocketControls.h"
 #include "PocketDisplay.h"
 #include "PocketLed.h"
+#include "PocketMediaCard.h"
 #include "PocketNavigation.h"
 #include "PocketStorage.h"
 
@@ -39,11 +40,13 @@ public:
   PocketDisplay &display() { return display_; }
   PocketControls &controls() { return controls_; }
   PocketLed &led() { return led_; }
+  PocketMediaCard &mediaCard() { return mediaCard_; }
   PocketStorage &storage() { return storage_; }
 
   const PocketDisplay &display() const { return display_; }
   const PocketControls &controls() const { return controls_; }
   const PocketLed &led() const { return led_; }
+  const PocketMediaCard &mediaCard() const { return mediaCard_; }
   const PocketStorage &storage() const { return storage_; }
 
   IGame *activeGame() const { return activeGame_; }
@@ -60,6 +63,7 @@ private:
   PocketDisplay display_;
   PocketControls controls_;
   PocketLed led_;
+  PocketMediaCard mediaCard_;
   PocketStorage storage_;
 
   IGame *games_[config::MAX_REGISTERED_GAMES] = {};

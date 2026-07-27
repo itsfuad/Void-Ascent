@@ -19,6 +19,7 @@ one PocketGame system, and the game objects.
 - shared controls
 - RGB LED
 - active storage namespace
+- removable-media access through `PocketMediaCard`
 
 A game receives `PocketGameSystem&` and uses the public APIs. It does not own or
 reinitialize hardware.
@@ -47,15 +48,24 @@ timed hold  -> select
 Raw press/release edges remain in the event object for future input devices or
 games, but menu code uses only semantic events.
 
-## Storage boundary
+## Storage and media boundaries
 
-`IStorageBackend` is implemented by concrete media. `PocketStorage` provides the
-fixed-width values/byte API used by system and games.
+`IStorageBackend` is implemented by concrete save media. `PocketStorage`
+provides the fixed-width values/byte API used by the system and games.
 
 ```text
 Game -> PocketStorage -> IStorageBackend -> Preferences/NVS
-                                      `-> optional SD backend
+                                      `-> optional SD save backend
 ```
+
+Large sequential assets use a separate API:
+
+```text
+Video Player -> PocketMediaCard -> onboard TF card -> /videos/*.pgv
+```
+
+This separation lets settings and save data remain in reliable on-chip NVS
+while videos are streamed from removable storage.
 
 ## Display safety
 

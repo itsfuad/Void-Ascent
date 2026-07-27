@@ -14,6 +14,15 @@ static constexpr int8_t LCD_DC_PIN = 15;
 static constexpr int8_t LCD_RESET_PIN = 21;
 static constexpr int8_t LCD_BACKLIGHT_PIN = 22;
 
+// The onboard TF card shares MOSI/SCLK with the LCD and uses its own CS.
+// All SD access is serialized by PocketMediaCard so the display and card can
+// safely share the SPI bus.
+static constexpr int8_t SD_MISO_PIN = 5;
+static constexpr int8_t SD_MOSI_PIN = 6;
+static constexpr int8_t SD_SCLK_PIN = 7;
+static constexpr int8_t SD_CS_PIN = 4;
+static constexpr uint32_t SD_SPI_HZ = 10000000UL;
+
 static constexpr int8_t RGB_LED_PIN = 8;
 static constexpr int8_t PRIMARY_BUTTON_PIN = 9;
 

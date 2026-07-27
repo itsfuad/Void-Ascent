@@ -135,6 +135,17 @@ static void drawTowerIcon(GFXcanvas16 &frame, int16_t x, int16_t y) {
   frame.drawFastHLine(x - 31, y + 39, 62, C_BORDER);
 }
 
+static void drawVideoIcon(GFXcanvas16 &frame, int16_t x, int16_t y) {
+  frame.fillRoundRect(x - 38, y - 27, 76, 54, 9, C_NAVY);
+  frame.drawRoundRect(x - 38, y - 27, 76, 54, 9, C_CYAN);
+  frame.fillTriangle(x - 8, y - 15, x - 8, y + 15, x + 18, y, C_GOLD);
+
+  for (int16_t offset = -31; offset <= 25; offset += 14) {
+    frame.fillRect(x + offset, y - 22, 7, 4, C_BORDER);
+    frame.fillRect(x + offset, y + 19, 7, 4, C_BORDER);
+  }
+}
+
 static void drawCricketIcon(GFXcanvas16 &frame, int16_t x, int16_t y) {
   frame.drawFastVLine(x - 16, y - 10, 30, C_BAT);
   frame.drawFastVLine(x - 10, y - 10, 30, C_BAT);
@@ -161,6 +172,8 @@ static void drawGameIcon(GFXcanvas16 &frame, const char *id,
     drawRocketIcon(frame, centreX, centreY);
   } else if (strcmp(id, "city-tower") == 0) {
     drawTowerIcon(frame, centreX, centreY);
+  } else if (strcmp(id, "video-player") == 0) {
+    drawVideoIcon(frame, centreX, centreY);
   } else if (strcmp(id, "pocket-cricket") == 0) {
     drawCricketIcon(frame, centreX, centreY);
   } else {
