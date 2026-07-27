@@ -23,6 +23,13 @@ static constexpr uint16_t C_BLUE = rgb565(68, 119, 224);
 static constexpr uint16_t C_GOLD = rgb565(255, 196, 67);
 static constexpr uint16_t C_ORANGE = rgb565(244, 116, 48);
 static constexpr uint16_t C_RED = rgb565(231, 66, 73);
+static constexpr uint16_t C_GREEN = rgb565(58, 202, 136);
+static constexpr uint16_t C_GRASS = rgb565(83, 196, 96);
+static constexpr uint16_t C_SKY = rgb565(85, 175, 241);
+static constexpr uint16_t C_SKY_2 = rgb565(28, 109, 214);
+static constexpr uint16_t C_BROWN = rgb565(171, 123, 73);
+static constexpr uint16_t C_STAND = rgb565(34, 58, 96);
+static constexpr uint16_t C_PURPLE = rgb565(124, 100, 224);
 
 static int16_t textWidth(const char *text, uint8_t size) {
   return (int16_t)(strlen(text) * 6 * size);
@@ -46,44 +53,6 @@ static void centered(GFXcanvas16 &frame, const char *text, int16_t y,
   frame.print(text);
 }
 
-static void drawPixelRocket(GFXcanvas16 &frame, int16_t x, int16_t y,
-                            uint16_t accent) {
-  frame.fillTriangle(x, y - 18, x - 8, y - 5, x + 8, y - 5, C_TEXT);
-  frame.fillRoundRect(x - 7, y - 6, 14, 25, 3, C_TEXT);
-  frame.fillRect(x - 7, y + 5, 14, 5, accent);
-  frame.fillCircle(x, y, 3, C_NAVY);
-  frame.fillTriangle(x - 7, y + 11, x - 13, y + 20, x - 6, y + 18, accent);
-  frame.fillTriangle(x + 7, y + 11, x + 13, y + 20, x + 6, y + 18, accent);
-  frame.fillTriangle(x - 4, y + 19, x, y + 30, x + 4, y + 19, C_ORANGE);
-}
-
-static void drawPixelTower(GFXcanvas16 &frame, int16_t x, int16_t y,
-                           uint16_t accent) {
-  for (uint8_t floor = 0; floor < 4; ++floor) {
-    const int16_t width = 38 - floor * 2;
-    const int16_t floorY = y + 23 - floor * 18;
-    frame.fillRect(x - width / 2 - 2, floorY - 2, width + 4, 18, C_NAVY);
-    frame.fillRect(x - width / 2, floorY, width, 14,
-                   floor & 1 ? C_PANEL_2 : accent);
-    frame.drawRect(x - width / 2, floorY, width, 14, C_TEXT);
-    frame.fillRect(x - width / 2 + 5, floorY + 4, 5, 5, C_GOLD);
-    frame.fillRect(x + width / 2 - 10, floorY + 4, 5, 5, C_GOLD);
-  }
-  frame.drawFastHLine(x - 36, y + 40, 72, C_BORDER);
-}
-
-static void drawGear(GFXcanvas16 &frame, int16_t x, int16_t y,
-                     uint16_t colour) {
-  frame.fillCircle(x, y, 18, colour);
-  frame.fillCircle(x, y, 9, C_PANEL);
-  for (uint8_t index = 0; index < 8; ++index) {
-    const float angle = index * 0.78539816f;
-    const int16_t px = x + (int16_t)roundf(cosf(angle) * 22.0f);
-    const int16_t py = y + (int16_t)roundf(sinf(angle) * 22.0f);
-    frame.fillRect(px - 3, py - 3, 7, 7, colour);
-  }
-}
-
 static void drawControlHint(GFXcanvas16 &frame, const char *left,
                             const char *right) {
   frame.fillRoundRect(7, 286, 158, 25, 6, C_PANEL);
@@ -102,6 +71,143 @@ static uint8_t clampBrightness(uint8_t value) {
   }
   return value - value % config::DISPLAY_BRIGHTNESS_STEP;
 }
+
+static void drawPixelRocket(GFXcanvas16 &frame, int16_t x, int16_t y,
+                            uint16_t accent) {
+  frame.fillTriangle(x, y - 18, x - 8, y - 5, x + 8, y - 5, C_TEXT);
+  frame.fillRoundRect(x - 7, y - 6, 14, 25, 3, C_TEXT);
+  frame.fillRect(x - 7, y + 5, 14, 5, accent);
+  frame.fillCircle(x, y, 3, C_NAVY);
+  frame.fillTriangle(x - 7, y + 11, x - 13, y + 20, x - 6, y + 18, accent);
+  frame.fillTriangle(x + 7, y + 11, x + 13, y + 20, x + 6, y + 18, accent);
+  frame.fillTriangle(x - 4, y + 19, x, y + 30, x + 4, y + 19, C_ORANGE);
+}
+
+static void drawMenuGamesGlyph(GFXcanvas16 &frame, int16_t x, int16_t y,
+                               bool active) {
+  const uint16_t accent = active ? C_CYAN : C_BORDER;
+  const uint16_t highlight = active ? C_GOLD : C_MUTED;
+  frame.drawRoundRect(x - 29, y - 22, 58, 44, 8, accent);
+  frame.drawRoundRect(x - 31, y - 24, 62, 48, 9, C_ORANGE);
+  for (uint8_t row = 0; row < 4; ++row) {
+    const int16_t cardY = y - 19 + row * 10;
+    frame.fillRoundRect(x - 24, cardY, 21, 7, 2, row & 1 ? C_PANEL_2 : C_PANEL);
+    frame.drawRoundRect(x - 24, cardY, 21, 7, 2, accent);
+    frame.fillRect(x - 18, cardY + 2, 3, 3, highlight);
+    frame.fillRect(x - 10, cardY + 2, 3, 3, highlight);
+  }
+  frame.drawFastHLine(x - 1, y - 18, 22, C_ORANGE);
+  frame.drawFastHLine(x - 1, y - 7, 26, accent);
+  frame.drawFastHLine(x - 1, y + 4, 18, C_ORANGE);
+  frame.drawFastHLine(x - 1, y + 15, 24, accent);
+}
+
+static void drawGear(GFXcanvas16 &frame, int16_t x, int16_t y,
+                     uint16_t colour) {
+  for (uint8_t index = 0; index < 8; ++index) {
+    const float angle = index * 0.78539816f;
+    const int16_t px = x + (int16_t)roundf(cosf(angle) * 19.0f);
+    const int16_t py = y + (int16_t)roundf(sinf(angle) * 19.0f);
+    frame.fillRoundRect(px - 4, py - 4, 9, 9, 2, colour);
+  }
+  frame.fillCircle(x, y, 16, colour);
+  frame.fillCircle(x, y, 10, C_PANEL);
+  frame.drawCircle(x, y, 17, C_ORANGE);
+  frame.drawCircle(x, y, 9, C_CYAN);
+  frame.fillCircle(x, y, 4, C_ORANGE);
+}
+
+static void drawPreviewFrame(GFXcanvas16 &frame) {
+  frame.fillRoundRect(18, 78, 136, 91, 8, C_NAVY);
+  frame.drawRoundRect(18, 78, 136, 91, 8, C_CYAN);
+}
+
+static void drawPreviewVoidAscent(GFXcanvas16 &frame, uint32_t now) {
+  drawPreviewFrame(frame);
+  frame.fillRect(20, 80, 132, 89, rgb565(69, 43, 67));
+  frame.fillRect(20, 119, 132, 50, rgb565(187, 125, 123));
+  frame.fillRoundRect(27, 87, 92, 22, 4, C_PANEL);
+  textLeft(frame, "POCKETGAME", 33, 91, 1, C_MUTED);
+  textLeft(frame, "VOID", 35, 102, 2, C_TEXT);
+  textLeft(frame, "ASCENT", 35, 120, 2, C_CYAN);
+  frame.fillCircle(130, 95, 9, rgb565(44, 82, 59));
+  frame.fillTriangle(120, 154, 140, 120, 154, 154, C_GOLD);
+  frame.fillTriangle(95, 154, 112, 121, 127, 154, C_NAVY);
+  drawPixelRocket(frame, 87 + (int16_t)(sinf(now * 0.003f) * 2.0f), 138, C_RED);
+  frame.drawLine(63, 96, 63, 151, C_ORANGE);
+  frame.drawLine(55, 151, 63, 96, C_ORANGE);
+  frame.drawLine(71, 151, 63, 96, C_ORANGE);
+  frame.drawLine(55, 140, 71, 140, C_ORANGE);
+  frame.fillCircle(56, 145, 2, C_RED);
+}
+
+static void drawPreviewCityTower(GFXcanvas16 &frame, uint32_t now) {
+  drawPreviewFrame(frame);
+  frame.fillRect(20, 80, 132, 89, C_SKY);
+  frame.fillRect(20, 142, 132, 27, rgb565(63, 134, 174));
+  frame.fillCircle(129, 95, 11, rgb565(250, 238, 176));
+  for (uint8_t i = 0; i < 3; ++i) {
+    const int16_t cx = 35 + i * 42;
+    frame.fillCircle(cx, 113 + (i & 1), 8, C_TEXT);
+    frame.fillCircle(cx + 8, 111, 10, C_TEXT);
+    frame.fillCircle(cx + 17, 113, 7, C_TEXT);
+  }
+  frame.fillRect(27, 150, 118, 5, C_STAND);
+  for (uint8_t floor = 0; floor < 2; ++floor) {
+    const int16_t width = 32 - floor * 2;
+    const int16_t fy = 128 - floor * 26;
+    frame.fillRect(86 - width / 2 - 2, fy - 2, width + 4, 20, C_NAVY);
+    frame.fillRect(86 - width / 2, fy, width, 16,
+                   floor & 1 ? C_PURPLE : C_BLUE);
+    frame.drawRect(86 - width / 2, fy, width, 16, C_TEXT);
+    frame.fillRect(86 - width / 2 + 5, fy + 4, 5, 5, C_GOLD);
+    frame.fillRect(86 + width / 2 - 10, fy + 4, 5, 5, C_GOLD);
+  }
+  const int16_t hookX = 86 + (int16_t)(sinf(now * 0.0024f) * 11.0f);
+  frame.drawFastHLine(43, 88, 86, C_GOLD);
+  frame.drawLine(86, 89, hookX, 110, C_NAVY);
+  frame.fillRect(hookX - 14, 115, 28, 16, C_RED);
+  frame.drawRect(hookX - 14, 115, 28, 16, C_TEXT);
+  frame.fillRect(hookX - 9, 119, 4, 5, C_GOLD);
+  frame.fillRect(hookX + 5, 119, 4, 5, C_GOLD);
+  frame.drawLine(hookX, 110, hookX - 7, 115, C_NAVY);
+  frame.drawLine(hookX, 110, hookX + 7, 115, C_NAVY);
+}
+
+static void drawPreviewCricket(GFXcanvas16 &frame, uint32_t now) {
+  drawPreviewFrame(frame);
+  for (int16_t y = 80; y < 124; ++y) {
+    const uint8_t blue = (uint8_t)(180 - (y - 80) * 2);
+    frame.drawFastHLine(20, y, 132, rgb565(38, blue, 244));
+  }
+  frame.fillRect(20, 124, 132, 45, C_GRASS);
+  frame.fillRect(20, 118, 132, 10, rgb565(78, 101, 180));
+  for (uint8_t i = 0; i < 18; ++i) {
+    const int16_t px = 24 + i * 7;
+    frame.fillCircle(px, 121 + (i & 1), 2, i & 2 ? C_GOLD : C_CYAN);
+    frame.fillCircle(px + 2, 123 + (i & 1), 2, C_TEXT);
+  }
+  frame.fillRoundRect(69, 86, 34, 20, 3, C_BLUE);
+  frame.drawRoundRect(69, 86, 34, 20, 3, C_TEXT);
+  textLeft(frame, "019", 76, 92, 1, C_TEXT);
+  frame.fillTriangle(69, 169, 86, 127, 103, 169, rgb565(205, 177, 132));
+  frame.drawLine(80, 136, 74, 164, rgb565(225, 204, 174));
+  frame.drawLine(92, 136, 98, 164, rgb565(225, 204, 174));
+  frame.drawFastHLine(80, 152, 12, rgb565(225, 204, 174));
+  const int16_t batAngle = (int16_t)(sinf(now * 0.004f) * 4.0f);
+  frame.fillCircle(61, 146, 7, C_GREEN);
+  frame.fillCircle(58, 144, 2, C_PANEL);
+  frame.drawLine(61, 152, 61, 164, C_PANEL);
+  frame.drawLine(61, 157, 54, 163, C_PANEL);
+  frame.drawLine(61, 157, 68, 163, C_PANEL);
+  frame.drawLine(65, 153, 76 + batAngle, 143 - batAngle, C_PANEL);
+  frame.drawLine(66, 153, 77 + batAngle, 143 - batAngle, C_TEXT);
+  frame.drawLine(58, 153, 49, 147, C_PANEL);
+  frame.drawLine(86, 141, 86, 151, C_BROWN);
+  frame.drawLine(89, 141, 89, 151, C_BROWN);
+  frame.drawLine(92, 141, 92, 151, C_BROWN);
+  frame.fillCircle(82 + (int16_t)(sinf(now * 0.003f) * 5.0f), 133, 2, C_RED);
+}
 } // namespace
 
 bool PocketGameSystem::registerGame(IGame &game) {
@@ -116,7 +222,7 @@ bool PocketGameSystem::registerGame(IGame &game) {
   }
 
   games_[gameCount_++] = &game;
-  gameMenu_.setItemCount(gameCount_ + 1); // final item is BACK
+  gameMenu_.setItemCount(gameCount_ + 1);
   return true;
 }
 
@@ -146,7 +252,7 @@ bool PocketGameSystem::begin(uint32_t serialBaud) {
       storage_.getUInt8("brightness", config::DISPLAY_DEFAULT_BRIGHTNESS));
   display_.setBrightness(brightness_);
 
-  homeMenu_.reset(2, 0); // GAMES, SETTINGS
+  homeMenu_.reset(2, 0);
   gameMenu_.reset(gameCount_ + 1, 0);
   setSystemScreen(SystemScreen::BOOT, millis());
   renderSystem(millis());
@@ -184,7 +290,6 @@ bool PocketGameSystem::launch(uint8_t index) {
   if (!storage_.open(next->storageNamespace())) {
     Serial.print("PocketGame: storage unavailable for ");
     Serial.println(next->title());
-    // Games still receive begin() and can run with API fallback values.
   }
 
   activeGame_ = next;
@@ -234,8 +339,6 @@ void PocketGameSystem::updateSystem(uint32_t now) {
     break;
   }
 
-  // launch() calls the game's begin(), which may render its first frame.
-  // Do not overwrite that frame with the old system screen in this loop.
   if (activeGame_ != nullptr) {
     return;
   }
@@ -345,10 +448,8 @@ void PocketGameSystem::renderBoot(uint32_t now) {
   centered(frame, "POCKET", 112, 2, C_TEXT);
   centered(frame, "GAME", 136, 2, C_GOLD);
 
-  frame.fillCircle(54, 177, 9, C_PANEL_2);
-  frame.fillCircle(118, 177, 9, C_ORANGE);
-  frame.drawFastHLine(45, 177, 18, C_MUTED);
-  frame.drawFastVLine(54, 168, 18, C_MUTED);
+  drawMenuGamesGlyph(frame, 54, 177, true);
+  drawGear(frame, 118, 177, C_ORANGE);
 
   centered(frame, "ONE BUTTON ARCADE", 224, 1, C_MUTED);
   const int16_t progress =
@@ -370,15 +471,15 @@ void PocketGameSystem::renderHome(uint32_t now) {
     const int16_t y = 82 + index * 82;
     const bool active = index == selected;
     frame.fillRoundRect(12, y, 148, 67, 10, active ? C_PANEL_2 : C_PANEL);
-    frame.drawRoundRect(12, y, 148, 67, 10, active ? C_GOLD : C_BORDER);
+    frame.drawRoundRect(12, y, 148, 67, 10, active ? C_ORANGE : C_BORDER);
     if (index == 0) {
-      drawPixelTower(frame, 43, y + 30, active ? C_CYAN : C_BORDER);
+      drawMenuGamesGlyph(frame, 44, y + 32, active);
       textLeft(frame, "GAMES", 78, y + 17, 2, active ? C_TEXT : C_MUTED);
       char count[18];
       snprintf(count, sizeof(count), "%u INSTALLED", gameCount_);
       textLeft(frame, count, 78, y + 43, 1, C_MUTED);
     } else {
-      drawGear(frame, 43, y + 33, active ? C_ORANGE : C_BORDER);
+      drawGear(frame, 44, y + 33, active ? C_CYAN : C_BORDER);
       textLeft(frame, "SETTINGS", 76, y + 17, 1, active ? C_TEXT : C_MUTED);
       textLeft(frame, "DISPLAY", 76, y + 40, 1, C_MUTED);
     }
@@ -412,14 +513,15 @@ void PocketGameSystem::renderGames(uint32_t now) {
     IGame *game = games_[selected];
     frame.fillRoundRect(9, 67, 154, 184, 12, C_PANEL);
     frame.drawRoundRect(9, 67, 154, 184, 12, C_BORDER);
-    frame.fillRoundRect(18, 78, 136, 91, 8, C_NAVY);
-    frame.drawRoundRect(18, 78, 136, 91, 8, C_CYAN);
 
     if (strcmp(game->id(), "void-ascent") == 0) {
-      drawPixelRocket(frame, 86, 116, C_ORANGE);
+      drawPreviewVoidAscent(frame, now);
     } else if (strcmp(game->id(), "city-tower") == 0) {
-      drawPixelTower(frame, 86, 114, C_CYAN);
+      drawPreviewCityTower(frame, now);
+    } else if (strcmp(game->id(), "pocket-cricket") == 0) {
+      drawPreviewCricket(frame, now);
     } else {
+      drawPreviewFrame(frame);
       frame.fillRoundRect(61, 96, 50, 50, 9, C_PANEL_2);
       centered(frame, "PG", 112, 2, C_GOLD);
     }
