@@ -23,11 +23,18 @@ static constexpr int16_t SCREEN_H = pocketgame::config::SCREEN_HEIGHT;
 static constexpr uint32_t FRAME_INTERVAL_MS = 33;
 static constexpr float MAX_DELTA_SECONDS = 0.08f;
 static constexpr uint8_t MAX_FLOORS = 36;
-static constexpr uint8_t MAX_PARTICLES = 32;
-static constexpr uint8_t MAX_PARACHUTISTS = 10;
-static constexpr float FLOOR_HEIGHT = 24.0f;
-static constexpr float FLOOR_WIDTH = 64.0f;
+static constexpr uint8_t MAX_PARTICLES = 40;
+
+// Gameplay blocks are intentionally almost square. The old 64 x 24 blocks
+// looked like slabs and also allowed unrealistic staircase towers.
+static constexpr float FLOOR_HEIGHT = 44.0f;
+static constexpr float FLOOR_WIDTH = 44.0f;
+static constexpr float FOUNDATION_WIDTH = 76.0f;
+static constexpr float MIN_CONTACT_WIDTH = 9.0f;
+static constexpr float STABILITY_MARGIN = 2.0f;
+
 static constexpr float GRAVITY = 310.0f;
+static constexpr float COLLAPSE_GRAVITY = 265.0f;
 static constexpr int16_t GROUND_Y = 286;
 
 static constexpr uint16_t C565(uint8_t red, uint8_t green, uint8_t blue) {
@@ -129,6 +136,15 @@ struct Floor {
   uint8_t style = 0;
   LandingQuality quality = LandingQuality::GOOD;
   uint32_t seed = 0;
+  uint16_t residents = 0;
+
+  // Detached floors use screen-space motion during a collapse. Keeping the
+  // collapse animation on the floor itself avoids another large object pool.
+  bool detached = false;
+  float detachedX = SCREEN_W * 0.5f;
+  float detachedY = 0.0f;
+  float velocityX = 0.0f;
+  float velocityY = 0.0f;
 };
 
 struct ActiveBlock {
@@ -138,9 +154,9 @@ struct ActiveBlock {
   float velocityX = 0.0f;
   float velocityY = 0.0f;
   float swingPhase = 0.0f;
-  float swingSpeed = 2.0f;
-  float swingAmplitude = 0.45f;
-  float ropeLength = 54.0f;
+  float swingSpeed = 1.35f;
+  float swingAmplitude = 0.20f;
+  float ropeLength = 86.0f;
   float anchorX = SCREEN_W * 0.5f;
   float hookX = SCREEN_W * 0.5f;
   float hookY = 80.0f;
@@ -158,16 +174,6 @@ struct Particle {
   uint16_t colour = C_WHITE;
 };
 
-struct Parachutist {
-  bool active = false;
-  float x = 0.0f;
-  float y = 0.0f;
-  float targetX = 0.0f;
-  float targetY = 0.0f;
-  float phase = 0.0f;
-  uint16_t umbrellaColour = C_RED;
-};
-
 struct CityState {
   ScreenNavigator<GameScreen> screens{GameScreen::MENU};
   MenuNavigator titleMenu{3, 0};
@@ -179,7 +185,6 @@ struct CityState {
   uint8_t floorCount = 0;
   ActiveBlock active;
   Particle particles[MAX_PARTICLES];
-  Parachutist parachutists[MAX_PARACHUTISTS];
 
   uint8_t lives = 3;
   uint8_t combo = 0;
@@ -194,6 +199,13 @@ struct CityState {
   float cameraWorld = 0.0f;
   float cameraTarget = 0.0f;
   float towerLean = 0.0f;
+
+  bool collapsing = false;
+  uint8_t collapseStartIndex = 0;
+  uint8_t collapseOriginalCount = 0;
+  uint32_t collapseStartedAt = 0;
+  bool progressSaved = false;
+
   float feedbackLife = 0.0f;
   char feedback[20] = {};
   uint16_t feedbackColour = C_TEXT;
@@ -238,7 +250,9 @@ static float floorTopScreenY(const Floor &floor) {
 }
 
 static float currentAnchorX(uint32_t now) {
-  return SCREEN_W * 0.5f + sinf(now * 0.00072f) * 15.0f;
+  // The trolley moves only slightly. Most of the aiming motion comes from the
+  // cable pendulum, so the block feels controlled instead of doubly wobbly.
+  return SCREEN_W * 0.5f + sinf(now * 0.00036f) * 3.5f;
 }
 
 static void setFeedback(const char *text, uint16_t colour, float seconds) {
@@ -284,41 +298,9 @@ static void spawnLandingBurst(float x, float y, bool perfect) {
   }
 }
 
-static Parachutist *allocateParachutist() {
-  for (uint8_t index = 0; index < MAX_PARACHUTISTS; ++index) {
-    if (!city.parachutists[index].active) {
-      city.parachutists[index].active = true;
-      return &city.parachutists[index];
-    }
-  }
-  const uint8_t replacement = randomGenerator.next() % MAX_PARACHUTISTS;
-  city.parachutists[replacement].active = true;
-  return &city.parachutists[replacement];
-}
-
-static void spawnResidents(uint8_t count, float targetX, float targetY) {
-  if (count > 4) {
-    count = 4;
-  }
-  for (uint8_t index = 0; index < count; ++index) {
-    Parachutist *person = allocateParachutist();
-    const bool fromLeft = (randomGenerator.next() & 1U) == 0;
-    person->x = fromLeft ? -8.0f : SCREEN_W + 8.0f;
-    person->y = randomGenerator.range(105.0f, 180.0f);
-    person->targetX = targetX + randomGenerator.range(-21.0f, 21.0f);
-    person->targetY = targetY + randomGenerator.range(4.0f, 18.0f);
-    person->phase = randomGenerator.range(0.0f, 6.28f);
-    person->umbrellaColour =
-        index & 1 ? C_RED : (index == 2 ? C_GOLD : C_CYAN);
-  }
-}
-
 static void clearEffects() {
   for (uint8_t index = 0; index < MAX_PARTICLES; ++index) {
     city.particles[index].active = false;
-  }
-  for (uint8_t index = 0; index < MAX_PARACHUTISTS; ++index) {
-    city.parachutists[index].active = false;
   }
 }
 
@@ -336,22 +318,6 @@ static void updateEffects(float deltaSeconds) {
     particle.velocityY += 95.0f * deltaSeconds;
     particle.x += particle.velocityX * deltaSeconds;
     particle.y += particle.velocityY * deltaSeconds;
-  }
-
-  for (uint8_t index = 0; index < MAX_PARACHUTISTS; ++index) {
-    Parachutist &person = city.parachutists[index];
-    if (!person.active) {
-      continue;
-    }
-    person.phase += deltaSeconds * 5.0f;
-    const float follow = 1.0f - expf(-1.65f * deltaSeconds);
-    person.x = lerpFloat(person.x, person.targetX, follow);
-    person.y = lerpFloat(person.y, person.targetY, follow * 0.78f);
-    person.x += sinf(person.phase) * 7.0f * deltaSeconds;
-    if (fabsf(person.x - person.targetX) < 2.2f &&
-        fabsf(person.y - person.targetY) < 3.2f) {
-      person.active = false;
-    }
   }
 }
 
@@ -382,7 +348,7 @@ static void updateHangingPosition(uint32_t now) {
   block.anchorX = currentAnchorX(now);
   const float angle = sinf(block.swingPhase) * block.swingAmplitude;
   block.hookX = block.anchorX + sinf(angle) * block.ropeLength;
-  block.hookY = 42.0f + cosf(angle) * block.ropeLength;
+  block.hookY = 40.0f + cosf(angle) * block.ropeLength;
   block.centreX = block.hookX;
   block.topY = block.hookY + 8.0f;
 }
@@ -390,12 +356,13 @@ static void updateHangingPosition(uint32_t now) {
 static void spawnBlock(uint32_t now) {
   ActiveBlock &block = city.active;
   block.mode = BlockMode::HANGING;
-  block.swingPhase = randomGenerator.range(-1.1f, 1.1f);
-  block.swingSpeed = 1.75f + city.floorCount * 0.047f;
+  block.swingPhase = randomGenerator.range(-0.9f, 0.9f);
+  block.swingSpeed =
+      clampFloat(1.30f + city.floorCount * 0.026f, 1.30f, 2.10f);
   block.swingAmplitude =
-      clampFloat(0.43f + city.floorCount * 0.009f, 0.43f, 0.72f);
+      clampFloat(0.18f + city.floorCount * 0.0045f, 0.18f, 0.34f);
   block.ropeLength =
-      clampFloat(61.0f - city.floorCount * 0.45f, 44.0f, 61.0f);
+      clampFloat(88.0f - city.floorCount * 0.08f, 84.0f, 88.0f);
   block.style = (city.floorCount / 6 + city.floorCount) % 4;
   block.seed = randomGenerator.next();
   block.velocityX = 0.0f;
@@ -414,7 +381,10 @@ static void releaseBlock() {
   const float angleVelocity =
       cosf(block.swingPhase) * block.swingAmplitude * phaseVelocity;
   block.velocityX = cosf(angle) * block.ropeLength * angleVelocity;
-  block.velocityY = -sinf(angle) * block.ropeLength * angleVelocity + 8.0f;
+  // Releasing a crane cable should always start a drop. The old tangent
+  // velocity could launch the block upward, which felt random on one button.
+  block.velocityY = clampFloat(
+      -sinf(angle) * block.ropeLength * angleVelocity + 12.0f, 10.0f, 36.0f);
   block.mode = BlockMode::DROPPING;
   setFeedback("DROP!", C_GOLD, 0.35f);
 }
@@ -430,6 +400,19 @@ static void resetRun(uint32_t now) {
   city.cameraWorld = 0.0f;
   city.cameraTarget = 0.0f;
   city.towerLean = 0.0f;
+  city.collapsing = false;
+  city.collapseStartIndex = 0;
+  city.collapseOriginalCount = 0;
+  city.collapseStartedAt = 0;
+  city.progressSaved = false;
+
+  for (uint8_t index = 0; index < MAX_FLOORS; ++index) {
+    city.floors[index].residents = 0;
+    city.floors[index].detached = false;
+    city.floors[index].velocityX = 0.0f;
+    city.floors[index].velocityY = 0.0f;
+  }
+
   city.feedbackLife = 0.0f;
   city.feedback[0] = '\0';
   city.completed = false;
@@ -442,11 +425,218 @@ static void resetRun(uint32_t now) {
 }
 
 static void finishRun(uint32_t now, bool completed) {
+  if (city.progressSaved) {
+    return;
+  }
+
   city.completed = completed;
+  city.progressSaved = true;
   saveProgress();
   city.resultMenu.reset(3, 0);
   city.screens.goTo(GameScreen::RESULT, now);
   pocketSystem->led().off();
+}
+
+
+static bool centreOfMassHasSupport(float centreOfMass, float lowerCentre,
+                                   float lowerWidth, float upperCentre,
+                                   float upperWidth) {
+  const float lowerLeft = lowerCentre - lowerWidth * 0.5f;
+  const float lowerRight = lowerCentre + lowerWidth * 0.5f;
+  const float upperLeft = upperCentre - upperWidth * 0.5f;
+  const float upperRight = upperCentre + upperWidth * 0.5f;
+
+  const float contactLeft = lowerLeft > upperLeft ? lowerLeft : upperLeft;
+  const float contactRight = lowerRight < upperRight ? lowerRight : upperRight;
+  const float contactWidth = contactRight - contactLeft;
+
+  if (contactWidth < MIN_CONTACT_WIDTH) {
+    return false;
+  }
+
+  const float margin =
+      STABILITY_MARGIN < contactWidth * 0.18f
+          ? STABILITY_MARGIN
+          : contactWidth * 0.18f;
+
+  return centreOfMass >= contactLeft + margin &&
+         centreOfMass <= contactRight - margin;
+}
+
+// Returns the first floor in the unsupported upper section. A return value of
+// -1 means every interface can carry the centre of mass above it.
+//
+// This is the key difference from the old overlap-only model: a staircase can
+// have local overlap at every floor while the combined upper mass is already
+// outside a lower contact patch.
+static int8_t firstUnstableFloor() {
+  if (city.floorCount == 0) {
+    return -1;
+  }
+
+  float wholeTowerSum = 0.0f;
+  for (uint8_t index = 0; index < city.floorCount; ++index) {
+    wholeTowerSum += city.floors[index].centreX;
+  }
+
+  const float wholeTowerCentre = wholeTowerSum / city.floorCount;
+  if (!centreOfMassHasSupport(
+          wholeTowerCentre, SCREEN_W * 0.5f, FOUNDATION_WIDTH,
+          city.floors[0].centreX, city.floors[0].width)) {
+    return 0;
+  }
+
+  for (uint8_t lowerIndex = 0; lowerIndex + 1 < city.floorCount;
+       ++lowerIndex) {
+    float upperSum = 0.0f;
+    uint8_t upperCount = 0;
+
+    for (uint8_t upperIndex = lowerIndex + 1;
+         upperIndex < city.floorCount; ++upperIndex) {
+      upperSum += city.floors[upperIndex].centreX;
+      ++upperCount;
+    }
+
+    const float upperCentreOfMass = upperSum / upperCount;
+    const Floor &lower = city.floors[lowerIndex];
+    const Floor &upper = city.floors[lowerIndex + 1];
+
+    if (!centreOfMassHasSupport(upperCentreOfMass, lower.centreX, lower.width,
+                                upper.centreX, upper.width)) {
+      return (int8_t)(lowerIndex + 1);
+    }
+  }
+
+  return -1;
+}
+
+static float towerCentreOfMass() {
+  if (city.floorCount == 0) {
+    return SCREEN_W * 0.5f;
+  }
+
+  float sum = 0.0f;
+  for (uint8_t index = 0; index < city.floorCount; ++index) {
+    sum += city.floors[index].centreX;
+  }
+  return sum / city.floorCount;
+}
+
+static void beginTowerCollapse(uint8_t startIndex, uint32_t now) {
+  if (startIndex >= city.floorCount) {
+    return;
+  }
+
+  city.collapsing = true;
+  city.collapseStartIndex = startIndex;
+  city.collapseOriginalCount = city.floorCount;
+  city.collapseStartedAt = now;
+  city.active.mode = BlockMode::WAITING;
+  city.combo = 0;
+
+  const float supportCentre =
+      startIndex == 0 ? SCREEN_W * 0.5f
+                      : city.floors[startIndex - 1].centreX;
+
+  float fallingCentre = 0.0f;
+  for (uint8_t index = startIndex; index < city.floorCount; ++index) {
+    fallingCentre += city.floors[index].centreX;
+  }
+  fallingCentre /= (city.floorCount - startIndex);
+
+  float direction = fallingCentre >= supportCentre ? 1.0f : -1.0f;
+  if (fabsf(fallingCentre - supportCentre) < 0.5f) {
+    direction = (randomGenerator.next() & 1U) ? 1.0f : -1.0f;
+  }
+
+  for (uint8_t index = startIndex; index < city.floorCount; ++index) {
+    Floor &floor = city.floors[index];
+    const float heightAmount = (index - startIndex) + 1.0f;
+    floor.detached = true;
+    floor.detachedX = floor.centreX;
+    floor.detachedY = floorTopScreenY(floor);
+    floor.velocityX =
+        direction * (24.0f + heightAmount * 5.0f) +
+        randomGenerator.range(-5.0f, 5.0f);
+    floor.velocityY = -18.0f - heightAmount * 2.5f;
+  }
+
+  const float seamY =
+      startIndex == 0
+          ? GROUND_Y + city.cameraWorld
+          : floorTopScreenY(city.floors[startIndex - 1]);
+  const float seamX =
+      startIndex == 0 ? SCREEN_W * 0.5f
+                      : city.floors[startIndex - 1].centreX;
+
+  for (uint8_t index = 0; index < 18; ++index) {
+    spawnParticle(seamX, seamY, randomGenerator.range(-75.0f, 75.0f),
+                  randomGenerator.range(-80.0f, 5.0f),
+                  randomGenerator.range(0.45f, 0.95f),
+                  index & 1U ? C_STONE : C_ORANGE);
+  }
+
+  setFeedback("TOWER UNSTABLE!", C_RED, 1.45f);
+}
+
+static void updateTowerCollapse(float deltaSeconds, uint32_t now) {
+  bool allGone = true;
+
+  for (uint8_t index = city.collapseStartIndex;
+       index < city.collapseOriginalCount; ++index) {
+    Floor &floor = city.floors[index];
+    if (!floor.detached) {
+      continue;
+    }
+
+    floor.velocityY += COLLAPSE_GRAVITY * deltaSeconds;
+    floor.detachedX += floor.velocityX * deltaSeconds;
+    floor.detachedY += floor.velocityY * deltaSeconds;
+    floor.velocityX *= 0.996f;
+
+    if (floor.detachedY < SCREEN_H + FLOOR_HEIGHT + 20.0f &&
+        floor.detachedX > -FLOOR_WIDTH - 20.0f &&
+        floor.detachedX < SCREEN_W + FLOOR_WIDTH + 20.0f) {
+      allGone = false;
+    }
+  }
+
+  if (!allGone && now - city.collapseStartedAt < 1850U) {
+    return;
+  }
+
+  uint32_t displacedResidents = 0;
+  for (uint8_t index = city.collapseStartIndex;
+       index < city.collapseOriginalCount; ++index) {
+    displacedResidents += city.floors[index].residents;
+    city.floors[index].detached = false;
+  }
+
+  city.population = displacedResidents < city.population
+                        ? city.population - displacedResidents
+                        : 0U;
+  city.floorCount = city.collapseStartIndex;
+  city.towerTopWorld = city.floorCount * FLOOR_HEIGHT;
+  city.collapsing = false;
+  city.towerLean = clampFloat(
+      (towerCentreOfMass() - SCREEN_W * 0.5f) * 0.16f, -5.0f, 5.0f);
+
+  const float desiredCamera =
+      city.towerTopWorld > 76.0f ? city.towerTopWorld - 76.0f : 0.0f;
+  city.cameraTarget = desiredCamera;
+
+  if (city.lives > 0) {
+    --city.lives;
+  }
+
+  if (city.lives == 0) {
+    finishRun(now, false);
+    return;
+  }
+
+  city.active.mode = BlockMode::WAITING;
+  city.nextBlockAt = now + 520U;
+  setFeedback("STRUCTURE LOST", C_ORANGE, 0.9f);
 }
 
 static void missBlock(uint32_t now) {
@@ -470,7 +660,9 @@ static void landBlock(uint32_t now) {
                                   ? SCREEN_W * 0.5f
                                   : city.floors[city.floorCount - 1].centreX;
   const float supportWidth =
-      city.floorCount == 0 ? 82.0f : city.floors[city.floorCount - 1].width;
+      city.floorCount == 0 ? FOUNDATION_WIDTH
+                           : city.floors[city.floorCount - 1].width;
+
   const float blockLeft = city.active.centreX - FLOOR_WIDTH * 0.5f;
   const float blockRight = city.active.centreX + FLOOR_WIDTH * 0.5f;
   const float supportLeft = supportCentre - supportWidth * 0.5f;
@@ -479,7 +671,7 @@ static void landBlock(uint32_t now) {
       (blockRight < supportRight ? blockRight : supportRight) -
       (blockLeft > supportLeft ? blockLeft : supportLeft);
 
-  if (overlap < 9.0f) {
+  if (overlap < MIN_CONTACT_WIDTH) {
     missBlock(now);
     return;
   }
@@ -493,24 +685,10 @@ static void landBlock(uint32_t now) {
   const float overlapRatio = clampFloat(overlap / FLOOR_WIDTH, 0.0f, 1.0f);
   LandingQuality quality = LandingQuality::ROUGH;
 
-  if (centreError <= 2.6f) {
+  if (centreError <= 2.4f) {
     quality = LandingQuality::PERFECT;
-    city.combo = city.combo < 12 ? city.combo + 1 : 12;
-    if (city.combo > city.bestCombo) {
-      city.bestCombo = city.combo;
-    }
-    setFeedback(city.combo >= 3 ? "PERFECT COMBO!" : "PERFECT!", C_GREEN,
-                1.15f);
-    city.perfectFlashUntil = now + 170;
-  } else if (overlapRatio >= 0.67f) {
+  } else if (overlapRatio >= 0.70f) {
     quality = LandingQuality::GOOD;
-    if (city.combo > 0) {
-      --city.combo;
-    }
-    setFeedback("GOOD DROP", C_CYAN, 0.9f);
-  } else {
-    city.combo = 0;
-    setFeedback("WOBBLY", C_ORANGE, 0.95f);
   }
 
   Floor &floor = city.floors[city.floorCount];
@@ -520,8 +698,41 @@ static void landBlock(uint32_t now) {
   floor.style = city.active.style;
   floor.quality = quality;
   floor.seed = city.active.seed;
+  floor.residents = 0;
+  floor.detached = false;
+  floor.velocityX = 0.0f;
+  floor.velocityY = 0.0f;
+
   ++city.floorCount;
   city.towerTopWorld += FLOOR_HEIGHT;
+
+  // Validate the complete tower after the new load is applied. Direct overlap
+  // alone is not enough: every lower contact must contain the centre of mass
+  // of all floors above it.
+  const int8_t unstableFloor = firstUnstableFloor();
+  if (unstableFloor >= 0) {
+    city.perfectFlashUntil = 0;
+    beginTowerCollapse((uint8_t)unstableFloor, now);
+    return;
+  }
+
+  if (quality == LandingQuality::PERFECT) {
+    city.combo = city.combo < 12 ? city.combo + 1 : 12;
+    if (city.combo > city.bestCombo) {
+      city.bestCombo = city.combo;
+    }
+    setFeedback(city.combo >= 3 ? "PERFECT COMBO!" : "PERFECT!", C_GREEN,
+                1.15f);
+    city.perfectFlashUntil = now + 170U;
+  } else if (quality == LandingQuality::GOOD) {
+    if (city.combo > 0) {
+      --city.combo;
+    }
+    setFeedback("GOOD DROP", C_CYAN, 0.9f);
+  } else {
+    city.combo = 0;
+    setFeedback("ROUGH LANDING", C_ORANGE, 0.95f);
+  }
 
   const uint32_t base = 90U + (uint32_t)(overlapRatio * 170.0f);
   const uint32_t comboBonus =
@@ -531,25 +742,28 @@ static void landBlock(uint32_t now) {
   const uint32_t residents =
       5U + (uint32_t)(overlapRatio * 7.0f) +
       (quality == LandingQuality::PERFECT ? city.combo * 2U : 0U);
-  city.population += residents;
+  floor.residents = residents > 65535U ? 65535U : (uint16_t)residents;
+  city.population += floor.residents;
 
   const float landingY = towerTopScreenY();
   spawnLandingBurst(city.active.centreX, landingY,
                     quality == LandingQuality::PERFECT);
-  if (quality != LandingQuality::ROUGH) {
-    spawnResidents(quality == LandingQuality::PERFECT ? 4 : 2,
-                   city.active.centreX, landingY + 4.0f);
-  }
 
-  const float offset = city.active.centreX - supportCentre;
-  city.towerLean = clampFloat(city.towerLean + offset * 0.075f, -9.0f, 9.0f);
+  // Visual lean follows the actual tower centre of mass instead of accumulating
+  // an unrelated offset forever.
+  city.towerLean = clampFloat(
+      (towerCentreOfMass() - SCREEN_W * 0.5f) * 0.16f, -5.0f, 5.0f);
+
+  // Keep the top near y=210. This leaves a visible drop gap below the longer
+  // cable while still showing several square floors.
   city.cameraTarget =
-      city.towerTopWorld > 118.0f ? city.towerTopWorld - 118.0f : 0.0f;
+      city.towerTopWorld > 76.0f ? city.towerTopWorld - 76.0f : 0.0f;
+
   city.active.mode = BlockMode::WAITING;
   city.nextBlockAt = now + (quality == LandingQuality::PERFECT ? 570U : 430U);
 
   if (city.floorCount >= MAX_FLOORS) {
-    finishRun(now + 1, true);
+    finishRun(now, true);
   }
 }
 
@@ -557,6 +771,15 @@ static void updatePlaying(float deltaSeconds, uint32_t now) {
   const float cameraFollow = 1.0f - expf(-5.2f * deltaSeconds);
   city.cameraWorld =
       lerpFloat(city.cameraWorld, city.cameraTarget, cameraFollow);
+
+  if (city.collapsing) {
+    updateTowerCollapse(deltaSeconds, now);
+    city.feedbackLife = city.feedbackLife > deltaSeconds
+                            ? city.feedbackLife - deltaSeconds
+                            : 0.0f;
+    updateEffects(deltaSeconds);
+    return;
+  }
 
   ActiveBlock &block = city.active;
   if (block.mode == BlockMode::HANGING) {
@@ -576,7 +799,7 @@ static void updatePlaying(float deltaSeconds, uint32_t now) {
       landBlock(now);
     }
 
-    if (block.mode == BlockMode::MISSED && block.topY > SCREEN_H + 22) {
+    if (block.mode == BlockMode::MISSED && block.topY > SCREEN_H + FLOOR_HEIGHT + 12.0f) {
       block.mode = BlockMode::WAITING;
       if (city.lives > 0) {
         --city.lives;
@@ -783,12 +1006,15 @@ static void floorColours(uint8_t style, uint16_t &body, uint16_t &dark,
 
 static void drawFloorBlock(float centreX, float topY, float width,
                            uint8_t style, uint32_t seed, bool hanging,
-                           LandingQuality quality) {
+                           LandingQuality quality,
+                           float height = FLOOR_HEIGHT) {
   const int16_t x = (int16_t)roundf(centreX - width * 0.5f);
   const int16_t y = (int16_t)roundf(topY);
   const int16_t w = (int16_t)roundf(width);
-  const int16_t h = (int16_t)FLOOR_HEIGHT;
-  if (y > SCREEN_H || y + h < 0 || x > SCREEN_W || x + w < 0) {
+  const int16_t h = (int16_t)roundf(height);
+
+  if (w < 12 || h < 12 || y > SCREEN_H || y + h < 0 || x > SCREEN_W ||
+      x + w < 0) {
     return;
   }
 
@@ -797,72 +1023,141 @@ static void drawFloorBlock(float centreX, float topY, float width,
   uint16_t trim;
   floorColours(style, body, dark, trim);
 
+  // Drop shadow, outer shell and inset facade.
   frame.fillRect(x + 3, y + 4, w, h, C_INK);
   frame.fillRect(x, y, w, h, dark);
-  frame.fillRect(x + 3, y + 2, w - 7, h - 4, body);
+  frame.fillRect(x + 3, y + 3, w - 7, h - 6, body);
   frame.fillRect(x + 1, y, w - 2, 3, trim);
+  frame.fillRect(x + 2, y + h - 4, w - 5, 3, trim);
   frame.drawRect(x, y, w, h, C_INK);
   frame.drawFastVLine(x + w - 4, y + 3, h - 6,
                       blend565(dark, C_BLACK, 80));
 
-  const uint8_t windowColumns = 4;
-  for (uint8_t column = 0; column < windowColumns; ++column) {
-    const int16_t wx = x + 6 + column * ((w - 12) / windowColumns);
-    const bool lit = ((seed >> (column * 3)) & 3U) != 0;
-    frame.fillRect(wx, y + 7, 7, 8, C_INK);
-    frame.fillRect(wx + 1, y + 8, 5, 6,
-                   lit ? C_GOLD : blend565(C_GLASS_DARK, C_SKY, 80));
-    frame.drawFastVLine(wx + 3, y + 8, 6, dark);
+  if (h >= 34) {
+    // Two rows of windows make the square modules read as complete rooms
+    // instead of stretched floor slabs.
+    static constexpr uint8_t WINDOW_COLUMNS = 3;
+    static constexpr uint8_t WINDOW_ROWS = 2;
+    const int16_t windowW = 8;
+    const int16_t windowH = 9;
+    const int16_t usableW = w - 10;
+    const int16_t columnStep = usableW / WINDOW_COLUMNS;
+    const int16_t firstY = y + 7;
+    const int16_t rowStep = (h - 15) / WINDOW_ROWS;
+
+    for (uint8_t row = 0; row < WINDOW_ROWS; ++row) {
+      for (uint8_t column = 0; column < WINDOW_COLUMNS; ++column) {
+        const int16_t wx =
+            x + 5 + column * columnStep + (columnStep - windowW) / 2;
+        const int16_t wy = firstY + row * rowStep;
+        const uint8_t bitIndex = (row * WINDOW_COLUMNS + column) * 3;
+        const bool lit = ((seed >> bitIndex) & 3U) != 0;
+
+        frame.fillRect(wx, wy, windowW, windowH, C_INK);
+        frame.fillRect(wx + 1, wy + 1, windowW - 2, windowH - 2,
+                       lit ? C_GOLD
+                           : blend565(C_GLASS_DARK, C_SKY, 80));
+        frame.drawFastVLine(wx + windowW / 2, wy + 1, windowH - 2, dark);
+        frame.drawFastHLine(wx + 1, wy + windowH / 2, windowW - 2, dark);
+      }
+    }
+
+    frame.drawFastHLine(x + 3, y + h / 2, w - 7,
+                        blend565(trim, body, 95));
+
+    // Small utility hatch adds detail without implying that every module has
+    // a ground-floor entrance.
+    frame.fillRect(x + w / 2 - 4, y + h - 11, 8, 7, C_INK);
+    frame.drawPixel(x + w / 2 + 2, y + h - 8, C_GOLD);
+  } else {
+    // Compact rendering used by menu illustrations.
+    for (uint8_t column = 0; column < 3; ++column) {
+      const int16_t wx = x + 5 + column * ((w - 10) / 3);
+      const bool lit = ((seed >> (column * 3)) & 3U) != 0;
+      frame.fillRect(wx, y + 6, 6, 7, C_INK);
+      frame.fillRect(wx + 1, y + 7, 4, 5, lit ? C_GOLD : C_GLASS_DARK);
+    }
   }
 
-  frame.drawFastHLine(x + 3, y + 18, w - 7, trim);
-  frame.fillRect(x + w / 2 - 4, y + 17, 8, 6, C_INK);
-  frame.drawPixel(x + w / 2 + 2, y + 20, C_GOLD);
+  if (style % 4 == 0 && h >= 34) {
+    // Sparse brick seams.
+    frame.drawFastHLine(x + 4, y + 5, w - 9,
+                        blend565(body, dark, 75));
+    frame.drawFastHLine(x + 4, y + h - 14, w - 9,
+                        blend565(body, dark, 75));
+  } else if (style % 4 == 3 && h >= 34) {
+    // Glass facade mullions.
+    frame.drawFastVLine(x + w / 2, y + 4, h - 9,
+                        blend565(trim, dark, 110));
+  }
 
   if (quality == LandingQuality::ROUGH && !hanging) {
-    frame.drawFastHLine(x + 7, y + 3, 9, C_ORANGE);
+    frame.drawLine(x + 6, y + 4, x + 13, y + 9, C_ORANGE);
+    frame.drawLine(x + 13, y + 9, x + 9, y + 15, C_ORANGE);
   } else if (quality == LandingQuality::PERFECT && !hanging) {
     frame.drawPixel(x + 2, y + 1, C_WHITE);
     frame.drawPixel(x + w - 3, y + 1, C_WHITE);
   }
 
   if (hanging) {
-    frame.fillRect(x + 8, y - 3, w - 16, 3, C_GOLD);
-    frame.drawFastVLine(x + 8, y - 7, 5, C_INK);
-    frame.drawFastVLine(x + w - 9, y - 7, 5, C_INK);
+    frame.fillRect(x + 7, y - 3, w - 14, 3, C_GOLD);
+    frame.drawFastVLine(x + 7, y - 8, 6, C_INK);
+    frame.drawFastVLine(x + w - 8, y - 8, 6, C_INK);
   }
 }
 
 static float floorSwayOffset(uint8_t index, uint32_t now) {
-  if (city.floorCount < 2) {
+  if (city.floorCount < 3 || city.collapsing) {
     return 0.0f;
   }
+
   const float heightAmount = (index + 1.0f) / city.floorCount;
-  const float wind = sinf(now * 0.0021f + index * 0.21f) *
-                     heightAmount * (0.45f + city.floorCount * 0.045f);
-  const float lean = city.towerLean * heightAmount * heightAmount;
+  const float bend = heightAmount * heightAmount;
+  const float floorFactor =
+      city.floorCount < 24 ? city.floorCount : 24;
+  const float windAmplitude = 0.22f + floorFactor * 0.025f;
+
+  // One shared wind phase creates a continuous bend. The previous per-floor
+  // phase made neighbouring modules separate visually.
+  const float wind = sinf(now * 0.00135f) * bend * windAmplitude;
+  const float lean = city.towerLean * bend;
   return wind + lean;
 }
 
 static void drawTower(uint32_t now) {
   drawGround();
+
+  // The foundation remains visible under the first module instead of
+  // disappearing as soon as construction starts.
+  const int16_t baseY =
+      (int16_t)roundf(GROUND_Y + city.cameraWorld - 10);
+  const int16_t foundationX =
+      (int16_t)roundf(SCREEN_W * 0.5f - FOUNDATION_WIDTH * 0.5f);
+  const int16_t foundationW = (int16_t)roundf(FOUNDATION_WIDTH);
+
+  frame.fillRect(foundationX - 4, baseY, foundationW + 8, 10,
+                 C_STONE_DARK);
+  frame.fillRect(foundationX, baseY - 4, foundationW, 5, C_STONE);
+  frame.drawFastHLine(foundationX, baseY - 4, foundationW, C_WHITE);
+
   for (uint8_t index = 0; index < city.floorCount; ++index) {
     const Floor &floor = city.floors[index];
+
+    if (floor.detached) {
+      drawFloorBlock(floor.detachedX, floor.detachedY, floor.width,
+                     floor.style, floor.seed, false, floor.quality);
+      continue;
+    }
+
     drawFloorBlock(floor.centreX + floorSwayOffset(index, now),
                    floorTopScreenY(floor), floor.width, floor.style, floor.seed,
                    false, floor.quality);
-  }
-
-  if (city.floorCount == 0) {
-    const int16_t baseY = (int16_t)roundf(GROUND_Y + city.cameraWorld - 10);
-    frame.fillRect(43, baseY, 86, 10, C_STONE_DARK);
-    frame.fillRect(47, baseY - 4, 78, 5, C_STONE);
-    frame.drawFastHLine(47, baseY - 4, 78, C_WHITE);
   }
 }
 
 static void drawCrane(uint32_t now) {
   const int16_t anchorX = (int16_t)roundf(currentAnchorX(now));
+
   frame.fillRect(9, 36, 154, 5, C_INK);
   frame.fillRect(12, 32, 147, 5, C_GOLD);
   for (int16_t x = 14; x < 154; x += 16) {
@@ -874,20 +1169,41 @@ static void drawCrane(uint32_t now) {
   frame.fillCircle(anchorX, 37, 5, C_INK);
   frame.fillCircle(anchorX, 37, 3, C_CYAN);
 
-  if (city.active.mode == BlockMode::HANGING) {
-    frame.drawLine(anchorX, 40, (int16_t)city.active.hookX,
-                   (int16_t)city.active.hookY, C_INK);
-    frame.drawLine((int16_t)city.active.hookX,
-                   (int16_t)city.active.hookY,
-                   (int16_t)(city.active.centreX - FLOOR_WIDTH * 0.5f + 8),
-                   (int16_t)city.active.topY, C_INK);
-    frame.drawLine((int16_t)city.active.hookX,
-                   (int16_t)city.active.hookY,
-                   (int16_t)(city.active.centreX + FLOOR_WIDTH * 0.5f - 8),
-                   (int16_t)city.active.topY, C_INK);
-    frame.fillCircle((int16_t)city.active.hookX,
-                     (int16_t)city.active.hookY, 3, C_GOLD);
+  if (city.active.mode != BlockMode::HANGING) {
+    return;
   }
+
+  const int16_t hookX = (int16_t)roundf(city.active.hookX);
+  const int16_t hookY = (int16_t)roundf(city.active.hookY);
+
+  // Two-tone cable gives the long rope a readable chain-like edge on the
+  // narrow display.
+  frame.drawLine(anchorX, 40, hookX, hookY, C_INK);
+  frame.drawLine(anchorX + 1, 40, hookX + 1, hookY, C_STONE);
+
+  const int16_t cableHeight = hookY - 40;
+  if (cableHeight > 12) {
+    for (int16_t step = 8; step < cableHeight; step += 9) {
+      const float amount = step / (float)cableHeight;
+      const int16_t linkX =
+          (int16_t)roundf(anchorX + (hookX - anchorX) * amount);
+      const int16_t linkY = 40 + step;
+      frame.drawPixel(linkX, linkY, C_WHITE);
+    }
+  }
+
+  const int16_t leftAttach =
+      (int16_t)roundf(city.active.centreX - FLOOR_WIDTH * 0.5f + 7.0f);
+  const int16_t rightAttach =
+      (int16_t)roundf(city.active.centreX + FLOOR_WIDTH * 0.5f - 7.0f);
+  const int16_t blockTop = (int16_t)roundf(city.active.topY);
+
+  frame.drawLine(hookX, hookY, leftAttach, blockTop, C_INK);
+  frame.drawLine(hookX + 1, hookY, leftAttach + 1, blockTop, C_STONE);
+  frame.drawLine(hookX, hookY, rightAttach, blockTop, C_INK);
+  frame.drawLine(hookX + 1, hookY, rightAttach + 1, blockTop, C_STONE);
+  frame.fillCircle(hookX, hookY, 3, C_GOLD);
+  frame.drawPixel(hookX, hookY, C_WHITE);
 }
 
 static void drawActiveBlock() {
@@ -909,23 +1225,6 @@ static void drawEffects() {
     const int16_t x = (int16_t)roundf(particle.x);
     const int16_t y = (int16_t)roundf(particle.y);
     frame.fillRect(x - 1, y - 1, 3, 3, particle.colour);
-  }
-
-  for (uint8_t index = 0; index < MAX_PARACHUTISTS; ++index) {
-    const Parachutist &person = city.parachutists[index];
-    if (!person.active) {
-      continue;
-    }
-    const int16_t x = (int16_t)roundf(person.x);
-    const int16_t y = (int16_t)roundf(person.y);
-    frame.fillCircle(x, y, 5, person.umbrellaColour);
-    frame.fillRect(x - 5, y, 11, 4, C_SKY);
-    frame.drawLine(x - 4, y + 1, x, y + 7, C_INK);
-    frame.drawLine(x + 4, y + 1, x, y + 7, C_INK);
-    frame.fillCircle(x, y + 8, 2, C565(224, 173, 122));
-    frame.drawFastVLine(x, y + 10, 5, C_RED);
-    frame.drawLine(x, y + 14, x - 2, y + 18, C_INK);
-    frame.drawLine(x, y + 14, x + 2, y + 18, C_INK);
   }
 }
 
@@ -990,18 +1289,22 @@ static void drawMenuOption(const char *label, int16_t y, bool selected) {
 }
 
 static void drawMiniTower(uint32_t now) {
-  const int16_t baseY = 168;
+  const int16_t baseY = 174;
   for (uint8_t index = 0; index < 4; ++index) {
-    const float sway = sinf(now * 0.002f + index * 0.35f) * index * 0.8f;
-    drawFloorBlock(86 + sway, baseY - (index + 1) * 22, 58, index,
+    const float heightAmount = (index + 1.0f) / 4.0f;
+    const float sway = sinf(now * 0.0017f) * heightAmount * heightAmount * 1.6f;
+    drawFloorBlock(86 + sway, baseY - (index + 1) * 26, 34, index,
                    0x7412U + index * 331U, false,
                    index == 3 ? LandingQuality::PERFECT
-                              : LandingQuality::GOOD);
+                              : LandingQuality::GOOD,
+                   26.0f);
   }
-  const int16_t hookX = 86 + (int16_t)(sinf(now * 0.003f) * 28.0f);
+
+  const int16_t hookX = 86 + (int16_t)(sinf(now * 0.0022f) * 18.0f);
   frame.drawFastHLine(24, 51, 124, C_GOLD);
-  frame.drawLine(86, 52, hookX, 82, C_INK);
-  drawFloorBlock(hookX, 87, 58, 0, 0x9911U, true, LandingQuality::GOOD);
+  frame.drawLine(86, 52, hookX, 84, C_INK);
+  drawFloorBlock(hookX, 89, 34, 0, 0x9911U, true, LandingQuality::GOOD,
+                 26.0f);
 }
 
 static void drawTitleMenu(uint32_t now) {
@@ -1034,20 +1337,20 @@ static void drawHowTo(uint32_t now) {
     frame.drawFastHLine(31, 65, 110, C_GOLD);
     const int16_t hookX = 86 + (int16_t)(sinf(now * 0.003f) * 27.0f);
     frame.drawLine(86, 66, hookX, 101, C_INK);
-    drawFloorBlock(hookX, 106, 58, 1, 0x1234U, true,
+    drawFloorBlock(hookX, 101, 44, 1, 0x1234U, true,
                    LandingQuality::GOOD);
-    drawFloorBlock(86, 183, 58, 0, 0x5678U, false,
+    drawFloorBlock(86, 184, 44, 0, 0x5678U, false,
                    LandingQuality::GOOD);
-    frame.drawLine(hookX, 137, 86, 178, C_CYAN);
+    frame.drawLine(hookX, 146, 86, 179, C_CYAN);
     centered("1. WATCH THE SWING", 222, 1, C_TEXT);
     centered("2. CLICK TO DROP", 240, 1, C_TEXT);
     centered("ALIGN THE FLOOR EDGES", 263, 1, C_MUTED);
   } else {
-    drawFloorBlock(86, 70, 58, 3, 0x1111U, false,
+    drawFloorBlock(86, 58, 44, 3, 0x1111U, false,
                    LandingQuality::PERFECT);
-    drawFloorBlock(86, 94, 58, 2, 0x2222U, false,
+    drawFloorBlock(86, 102, 44, 2, 0x2222U, false,
                    LandingQuality::PERFECT);
-    drawFloorBlock(86, 118, 58, 1, 0x3333U, false,
+    drawFloorBlock(86, 146, 44, 1, 0x3333U, false,
                    LandingQuality::PERFECT);
     centered("PERFECT DROPS", 161, 1, C_GREEN);
     centered("BUILD COMBOS + RESIDENTS", 181, 1, C_TEXT);
