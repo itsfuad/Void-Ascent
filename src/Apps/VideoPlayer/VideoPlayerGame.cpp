@@ -120,7 +120,7 @@ static void textRight(const char *text, int16_t rightX, int16_t y,
 
 static void centered(const char *text, int16_t y, uint8_t size,
                      uint16_t colour) {
-  textLeft(text, (SCREEN_W - textWidth(text, size)) / 2, y, size, colour);
+  textLeft(text, (frame.width() - textWidth(text, size)) / 2, y, size, colour);
 }
 
 static bool equalsIgnoreCase(char first, char second) {
@@ -263,20 +263,35 @@ static bool scanVideos(uint32_t now) {
   return true;
 }
 
+static bool isLandscapeHeader(const PgvHeader &header) {
+  return header.width == (uint16_t)SCREEN_H &&
+         header.height == (uint16_t)SCREEN_W;
+}
+
+static bool isPortraitHeader(const PgvHeader &header) {
+  return header.width == (uint16_t)SCREEN_W &&
+         header.height == (uint16_t)SCREEN_H;
+}
+
+static bool currentVideoIsLandscape() {
+  return isLandscapeHeader(player.header);
+}
+
 static bool validHeader(const PgvHeader &header, uint64_t fileSize) {
   if (memcmp(header.magic, "PGV1", 4) != 0 ||
-      header.width != (uint16_t)SCREEN_W ||
-      header.height != (uint16_t)SCREEN_H ||
+      (!isPortraitHeader(header) && !isLandscapeHeader(header)) ||
       header.fpsTimes100 < 100 || header.fpsTimes100 > 6000 ||
       header.frameCount == 0) {
     return false;
   }
 
+  const uint32_t pixelCount =
+      (uint32_t)header.width * (uint32_t)header.height;
   uint32_t expectedFrameBytes = 0;
   if (header.pixelFormat == PIXEL_FORMAT_RGB332) {
-    expectedFrameBytes = (uint32_t)SCREEN_W * (uint32_t)SCREEN_H;
+    expectedFrameBytes = pixelCount;
   } else if (header.pixelFormat == PIXEL_FORMAT_RGB565_LE) {
-    expectedFrameBytes = (uint32_t)SCREEN_W * (uint32_t)SCREEN_H * 2U;
+    expectedFrameBytes = pixelCount * 2U;
   } else {
     return false;
   }
@@ -308,7 +323,7 @@ static bool openSelectedVideo(uint32_t now, bool showOverlay) {
           sizeof(player.header) ||
       !validHeader(player.header, player.file.size())) {
     closeVideo();
-    setError("INVALID OR OLD PGV FILE");
+    setError("INVALID PGV FILE");
     player.screens.goTo(PlayerScreen::FILE_ERROR, now);
     return false;
   }
@@ -339,10 +354,24 @@ static uint16_t rgb332To565(uint8_t pixel) {
   return (uint16_t)((red5 << 11) | (green6 << 5) | blue5);
 }
 
+static uint32_t landscapeDestinationIndex(uint32_t sourcePixelIndex) {
+  const uint16_t sourceX =
+      (uint16_t)(sourcePixelIndex % (uint32_t)player.header.width);
+  const uint16_t sourceY =
+      (uint16_t)(sourcePixelIndex / (uint32_t)player.header.width);
+
+  // Match Adafruit_GFX rotation 1. The video is upright when the device is
+  // turned sideways, while the physical LCD framebuffer remains 172x320.
+  const uint16_t destinationX = (uint16_t)(SCREEN_W - 1 - sourceY);
+  const uint16_t destinationY = sourceX;
+  return (uint32_t)destinationY * (uint32_t)SCREEN_W + destinationX;
+}
+
 static bool readRgb332Frame() {
   uint16_t *destination = frame.getBuffer();
   uint32_t remaining = player.header.frameBytes;
   uint32_t pixelIndex = 0;
+  const bool landscape = currentVideoIsLandscape();
 
   while (remaining > 0) {
     const size_t requested = remaining > CONVERSION_CHUNK_BYTES
@@ -354,7 +383,13 @@ static bool readRgb332Frame() {
     }
 
     for (size_t index = 0; index < readCount; ++index) {
-      destination[pixelIndex++] = rgb332To565(player.conversionBuffer[index]);
+      const uint16_t colour = rgb332To565(player.conversionBuffer[index]);
+      if (landscape) {
+        destination[landscapeDestinationIndex(pixelIndex)] = colour;
+      } else {
+        destination[pixelIndex] = colour;
+      }
+      ++pixelIndex;
     }
     remaining -= readCount;
   }
@@ -362,8 +397,38 @@ static bool readRgb332Frame() {
 }
 
 static bool readRgb565Frame() {
-  return player.file.read((uint8_t *)frame.getBuffer(),
-                          player.header.frameBytes) == player.header.frameBytes;
+  if (!currentVideoIsLandscape()) {
+    return player.file.read((uint8_t *)frame.getBuffer(),
+                            player.header.frameBytes) == player.header.frameBytes;
+  }
+
+  uint16_t *destination = frame.getBuffer();
+  uint32_t remaining = player.header.frameBytes;
+  uint32_t pixelIndex = 0;
+
+  while (remaining > 0) {
+    size_t requested = remaining > CONVERSION_CHUNK_BYTES
+                           ? CONVERSION_CHUNK_BYTES
+                           : (size_t)remaining;
+    requested &= ~(size_t)1U;
+    if (requested == 0) {
+      return false;
+    }
+
+    const size_t readCount = player.file.read(player.conversionBuffer, requested);
+    if (readCount != requested || (readCount & 1U) != 0U) {
+      return false;
+    }
+
+    for (size_t index = 0; index < readCount; index += 2) {
+      const uint16_t colour =
+          (uint16_t)player.conversionBuffer[index] |
+          ((uint16_t)player.conversionBuffer[index + 1] << 8);
+      destination[landscapeDestinationIndex(pixelIndex++)] = colour;
+    }
+    remaining -= readCount;
+  }
+  return true;
 }
 
 static void drawPlaybackOverlay(uint32_t now) {
@@ -371,19 +436,26 @@ static void drawPlaybackOverlay(uint32_t now) {
     return;
   }
 
-  frame.fillRect(0, 0, SCREEN_W, 25, C_NAVY);
-  frame.drawFastHLine(0, 24, SCREEN_W, C_CYAN);
+  frame.setRotation(currentVideoIsLandscape() ? 1 : 0);
+  const int16_t logicalWidth = frame.width();
+  const int16_t logicalHeight = frame.height();
+
+  frame.fillRect(0, 0, logicalWidth, 25, C_NAVY);
+  frame.drawFastHLine(0, 24, logicalWidth, C_CYAN);
   textLeft(player.videos[player.selected].title, 7, 8, 1, C_TEXT);
 
   char counter[20];
   snprintf(counter, sizeof(counter), "%u/%u", player.selected + 1,
            player.videoCount);
-  textRight(counter, 165, 8, 1, C_MUTED);
+  textRight(counter, logicalWidth - 7, 8, 1, C_MUTED);
 
-  frame.fillRoundRect(12, 290, 148, 22, 5, C_PANEL);
-  frame.drawRoundRect(12, 290, 148, 22, 5, C_BORDER);
-  textLeft("CLICK NEXT", 19, 298, 1, C_CYAN);
-  textRight("HOLD PAUSE", 153, 298, 1, C_GOLD);
+  frame.fillRoundRect(12, logicalHeight - 30, logicalWidth - 24, 22, 5,
+                      C_PANEL);
+  frame.drawRoundRect(12, logicalHeight - 30, logicalWidth - 24, 22, 5,
+                      C_BORDER);
+  textLeft("CLICK NEXT", 19, logicalHeight - 22, 1, C_CYAN);
+  textRight("HOLD PAUSE", logicalWidth - 19, logicalHeight - 22, 1, C_GOLD);
+  frame.setRotation(0);
 }
 
 static bool decodeAndPresentFrame(uint32_t now) {
@@ -463,6 +535,7 @@ static void drawVideoIcon(int16_t x, int16_t y, bool large) {
 }
 
 static void drawHeader(const char *subtitle) {
+  frame.setRotation(0);
   frame.fillScreen(C_BLACK);
   frame.fillRect(0, 0, SCREEN_W, 55, C_NAVY);
   frame.drawFastHLine(0, 54, SCREEN_W, C_CYAN);
@@ -539,16 +612,42 @@ static void drawPauseOption(const char *label, int16_t y, bool selected) {
 }
 
 static void renderPaused() {
-  frame.fillRoundRect(17, 50, 138, 232, 12, C_PANEL);
-  frame.drawRoundRect(17, 50, 138, 232, 12, C_GOLD);
-  centered("PAUSED", 67, 2, C_TEXT);
-  frame.drawFastHLine(31, 96, 110, C_BORDER);
+  if (currentVideoIsLandscape()) {
+    frame.setRotation(1);
+    frame.fillRoundRect(34, 14, 252, 144, 12, C_PANEL);
+    frame.drawRoundRect(34, 14, 252, 144, 12, C_GOLD);
+    centered("PAUSED", 25, 2, C_TEXT);
+    frame.drawFastHLine(54, 52, 212, C_BORDER);
 
-  drawPauseOption("RESUME", 108, player.pauseMenu.selected() == 0);
-  drawPauseOption("RESTART", 143, player.pauseMenu.selected() == 1);
-  drawPauseOption("VIDEO LIBRARY", 178, player.pauseMenu.selected() == 2);
-  drawPauseOption("POCKETGAME", 213, player.pauseMenu.selected() == 3);
-  centered("CLICK NEXT  HOLD SELECT", 257, 1, C_MUTED);
+    const char *labels[4] = {"RESUME", "RESTART", "VIDEO LIBRARY",
+                             "POCKETGAME"};
+    for (uint8_t index = 0; index < 4; ++index) {
+      const int16_t x = 50 + (index % 2) * 112;
+      const int16_t y = 63 + (index / 2) * 38;
+      const bool selected = player.pauseMenu.selected() == index;
+      frame.fillRoundRect(x, y, 104, 28, 7,
+                          selected ? C_PANEL_2 : C_PANEL);
+      frame.drawRoundRect(x, y, 104, 28, 7,
+                          selected ? C_GOLD : C_BORDER);
+      textLeft(labels[index],
+               x + (104 - textWidth(labels[index], 1)) / 2,
+               y + 10, 1, selected ? C_TEXT : C_MUTED);
+    }
+    centered("CLICK NEXT  HOLD SELECT", 143, 1, C_MUTED);
+    frame.setRotation(0);
+  } else {
+    frame.setRotation(0);
+    frame.fillRoundRect(17, 50, 138, 232, 12, C_PANEL);
+    frame.drawRoundRect(17, 50, 138, 232, 12, C_GOLD);
+    centered("PAUSED", 67, 2, C_TEXT);
+    frame.drawFastHLine(31, 96, 110, C_BORDER);
+
+    drawPauseOption("RESUME", 108, player.pauseMenu.selected() == 0);
+    drawPauseOption("RESTART", 143, player.pauseMenu.selected() == 1);
+    drawPauseOption("VIDEO LIBRARY", 178, player.pauseMenu.selected() == 2);
+    drawPauseOption("POCKETGAME", 213, player.pauseMenu.selected() == 3);
+    centered("CLICK NEXT  HOLD SELECT", 257, 1, C_MUTED);
+  }
   pocketSystem->display().present();
 }
 

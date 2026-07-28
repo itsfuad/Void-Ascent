@@ -3357,7 +3357,7 @@ static void updateCentering(float deltaSeconds) {
     return;
   }
 
-  float centeringSpeed = 12.0f;
+  float centeringSpeed = 2.0f;
   float followAmount = 1.0f - expf(-centeringSpeed * deltaSeconds);
   float newOffset =
       lerpFloat(game.centeringOffset, game.centeringTarget, followAmount);

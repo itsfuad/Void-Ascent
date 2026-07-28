@@ -2,12 +2,15 @@
 """Convert ordinary videos into PocketGame Video (.pgv) files.
 
 Inputs default to ./video_src and outputs default to ./videos.
-The generated files are copied to the SD card's /videos directory.
+Portrait sources become 172x320 PGV files. Landscape sources become 320x172
+PGV files and are rotated by the player so they fill the display when the
+PocketGame is held sideways.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import struct
@@ -16,8 +19,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-WIDTH = 172
-HEIGHT = 320
+PORTRAIT_WIDTH = 172
+PORTRAIT_HEIGHT = 320
+LANDSCAPE_WIDTH = 320
+LANDSCAPE_HEIGHT = 172
 MAGIC = b"PGV1"
 HEADER_STRUCT = struct.Struct("<4sHHHBBII12s")
 PIXEL_FORMATS = {
@@ -35,20 +40,86 @@ def safe_stem(stem: str) -> str:
     return cleaned or "video"
 
 
-def build_filter(mode: str, fps: float) -> str:
+def build_filter(mode: str, fps: float, width: int, height: int) -> str:
     if mode == "crop":
         geometry = (
-            f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase:"
+            f"scale={width}:{height}:force_original_aspect_ratio=increase:"
             "flags=lanczos,"
-            f"crop={WIDTH}:{HEIGHT}"
+            f"crop={width}:{height}"
         )
     else:
         geometry = (
-            f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease:"
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease:"
             "flags=lanczos,"
-            f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"
         )
     return f"fps={fps:g},{geometry},setsar=1"
+
+
+def probe_display_dimensions(source: Path, ffprobe: str) -> tuple[int, int]:
+    command = [
+        ffprobe,
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries",
+        "stream=width,height:stream_tags=rotate:stream_side_data=rotation",
+        "-of", "json",
+        str(source),
+    ]
+    result = subprocess.run(
+        command,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    data = json.loads(result.stdout)
+    streams = data.get("streams", [])
+    if not streams:
+        raise RuntimeError("FFprobe found no video stream")
+
+    stream = streams[0]
+    width = int(stream.get("width", 0))
+    height = int(stream.get("height", 0))
+    if width <= 0 or height <= 0:
+        raise RuntimeError("FFprobe returned invalid video dimensions")
+
+    rotation = 0
+    tags = stream.get("tags") or {}
+    if "rotate" in tags:
+        try:
+            rotation = int(round(float(tags["rotate"])))
+        except (TypeError, ValueError):
+            rotation = 0
+
+    for side_data in stream.get("side_data_list") or []:
+        if "rotation" in side_data:
+            try:
+                rotation = int(round(float(side_data["rotation"])))
+            except (TypeError, ValueError):
+                pass
+            break
+
+    if abs(rotation) % 180 == 90:
+        width, height = height, width
+
+    return width, height
+
+
+def choose_output_dimensions(
+    source: Path,
+    orientation: str,
+    ffprobe: str,
+) -> tuple[int, int, str]:
+    if orientation == "portrait":
+        return PORTRAIT_WIDTH, PORTRAIT_HEIGHT, "portrait"
+    if orientation == "landscape":
+        return LANDSCAPE_WIDTH, LANDSCAPE_HEIGHT, "landscape"
+
+    source_width, source_height = probe_display_dimensions(source, ffprobe)
+    if source_width > source_height:
+        return LANDSCAPE_WIDTH, LANDSCAPE_HEIGHT, "landscape"
+    return PORTRAIT_WIDTH, PORTRAIT_HEIGHT, "portrait"
 
 
 def convert_one(
@@ -57,10 +128,15 @@ def convert_one(
     fps: float,
     pixel_format_name: str,
     mode: str,
+    orientation: str,
     ffmpeg: str,
-) -> tuple[int, int]:
+    ffprobe: str,
+) -> tuple[int, int, str, int, int]:
+    width, height, chosen_orientation = choose_output_dimensions(
+        source, orientation, ffprobe
+    )
     format_id, ffmpeg_pixel_format, bytes_per_pixel = PIXEL_FORMATS[pixel_format_name]
-    frame_bytes = WIDTH * HEIGHT * bytes_per_pixel
+    frame_bytes = width * height * bytes_per_pixel
     fps_times_100 = round(fps * 100)
     if not 100 <= fps_times_100 <= 6000:
         raise ValueError("FPS must be between 1 and 60")
@@ -80,7 +156,7 @@ def convert_one(
             "-y",
             "-i", str(source),
             "-an",
-            "-vf", build_filter(mode, fps),
+            "-vf", build_filter(mode, fps, width, height),
             "-pix_fmt", ffmpeg_pixel_format,
             "-f", "rawvideo",
             str(raw_path),
@@ -99,8 +175,8 @@ def convert_one(
 
         header = HEADER_STRUCT.pack(
             MAGIC,
-            WIDTH,
-            HEIGHT,
+            width,
+            height,
             fps_times_100,
             format_id,
             0,
@@ -113,7 +189,13 @@ def convert_one(
             output.write(header)
             shutil.copyfileobj(raw, output, length=1024 * 1024)
 
-        return frame_count, destination.stat().st_size
+        return (
+            frame_count,
+            destination.stat().st_size,
+            chosen_orientation,
+            width,
+            height,
+        )
     finally:
         raw_path.unlink(missing_ok=True)
 
@@ -143,7 +225,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode", choices=("fit", "crop"), default="fit",
-        help="fit adds black bars; crop fills the whole display",
+        help="fit adds black bars; crop fills the selected orientation",
+    )
+    parser.add_argument(
+        "--orientation", choices=("auto", "portrait", "landscape"),
+        default="auto",
+        help="output orientation (default: auto from each source video)",
     )
     parser.add_argument(
         "--clean", action="store_true",
@@ -153,14 +240,25 @@ def parse_args() -> argparse.Namespace:
         "--ffmpeg", default="ffmpeg",
         help="ffmpeg executable name/path (default: ffmpeg)",
     )
+    parser.add_argument(
+        "--ffprobe", default="ffprobe",
+        help="ffprobe executable name/path (default: ffprobe)",
+    )
     return parser.parse_args()
+
+
+def executable_exists(value: str) -> bool:
+    return shutil.which(value) is not None or Path(value).is_file()
 
 
 def main() -> int:
     args = parse_args()
 
-    if shutil.which(args.ffmpeg) is None and not Path(args.ffmpeg).is_file():
+    if not executable_exists(args.ffmpeg):
         print(f"error: ffmpeg not found: {args.ffmpeg}", file=sys.stderr)
+        return 2
+    if args.orientation == "auto" and not executable_exists(args.ffprobe):
+        print(f"error: ffprobe not found: {args.ffprobe}", file=sys.stderr)
         return 2
 
     input_dir = args.input.resolve()
@@ -187,21 +285,30 @@ def main() -> int:
     for source in sources:
         destination = output_dir / f"{safe_stem(source.stem)}.pgv"
         try:
-            frame_count, byte_count = convert_one(
+            frame_count, byte_count, chosen, width, height = convert_one(
                 source=source,
                 destination=destination,
                 fps=args.fps,
                 pixel_format_name=args.format,
                 mode=args.mode,
+                orientation=args.orientation,
                 ffmpeg=args.ffmpeg,
+                ffprobe=args.ffprobe,
             )
             seconds = frame_count / args.fps
             mib = byte_count / (1024 * 1024)
             print(
                 f"OK  {source.name} -> {destination.name}  "
+                f"{chosen} {width}x{height}, "
                 f"{frame_count} frames, {seconds:.1f}s, {mib:.1f} MiB"
             )
-        except (subprocess.CalledProcessError, OSError, RuntimeError, ValueError) as error:
+        except (
+            subprocess.CalledProcessError,
+            json.JSONDecodeError,
+            OSError,
+            RuntimeError,
+            ValueError,
+        ) as error:
             failures += 1
             print(f"FAIL {source.name}: {error}", file=sys.stderr)
 
@@ -212,6 +319,7 @@ def main() -> int:
     print()
     print(f"Copy the generated .pgv files from {output_dir}")
     print("to the SD card directory /videos (FAT32 card).")
+    print("Portrait videos play upright; landscape videos fill the screen sideways.")
     return 0
 
 
