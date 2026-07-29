@@ -1,9 +1,7 @@
 CompileFlags:
-  Add:
-    - -std=gnu++17
-    - -Isrc
-    - -Isrc/PocketGame
-    - -Isrc/Games/VoidAscent
-    - -Isrc/Games/CityTower
+  CompilationDatabase: build/esp32.esp32.esp32c6
+  Remove:
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
 Diagnostics:
   UnusedIncludes: Strict

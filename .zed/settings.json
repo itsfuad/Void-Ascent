@@ -1,0 +1,11 @@
+{
+  "lsp": {
+    "clangd": {
+      "binary": {
+        "arguments": [
+          "--query-driver=/home/itsfuad/.arduino15/packages/esp32/tools/esp-rv32/2601/bin/riscv32-esp-elf-*"
+        ]
+      }
+    }
+  }
+}
